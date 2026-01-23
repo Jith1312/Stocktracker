@@ -172,10 +172,36 @@ export async function signSolanaTransaction(
       transaction: transaction,
     } as any);
     
-    console.log("[Privy] Sign response received:", JSON.stringify(response, null, 2));
+    console.log("[Privy] Sign response received");
     
-    // Serialize the signed transaction back to base64
-    const signedTxBuffer = Buffer.from(response.signedTransaction.serialize());
+    // The response.signedTransaction is a VersionedTransaction object
+    // We need to serialize it back to base64
+    const signedTx = response.signedTransaction as VersionedTransaction;
+    
+    // Check if it's already a VersionedTransaction with serialize method
+    let signedTxBuffer: Buffer;
+    if (typeof signedTx.serialize === 'function') {
+      signedTxBuffer = Buffer.from(signedTx.serialize());
+    } else {
+      // If it's a plain object, we need to reconstruct the VersionedTransaction
+      console.log("[Privy] Response is plain object, reconstructing transaction...");
+      
+      // Reconstruct signatures from the object representation
+      const signatures = (signedTx as any).signatures.map((sig: any) => {
+        if (sig instanceof Uint8Array) return sig;
+        // Convert object with numeric keys to Uint8Array
+        const bytes = new Uint8Array(64);
+        for (let i = 0; i < 64; i++) {
+          bytes[i] = sig[i] || 0;
+        }
+        return bytes;
+      });
+      
+      // Create a new VersionedTransaction with the original message but new signatures
+      const reconstructedTx = new VersionedTransaction(transaction.message, signatures);
+      signedTxBuffer = Buffer.from(reconstructedTx.serialize());
+    }
+    
     console.log("[Privy] Signed transaction serialized, length:", signedTxBuffer.length);
     return { signedTransaction: signedTxBuffer.toString("base64") };
   } catch (error: any) {
