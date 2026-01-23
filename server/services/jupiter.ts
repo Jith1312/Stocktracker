@@ -93,6 +93,9 @@ export async function executeUltraOrder(
     headers["x-api-key"] = JUPITER_API_KEY;
   }
 
+  console.log("[Jupiter] Executing ultra order with requestId:", requestId);
+  console.log("[Jupiter] Signed transaction length:", signedTransaction.length);
+  
   const response = await fetch(`${JUPITER_API_URL}/ultra/v1/execute`, {
     method: "POST",
     headers,
@@ -103,6 +106,7 @@ export async function executeUltraOrder(
   });
 
   const data = await response.json();
+  console.log("[Jupiter] Execute response:", JSON.stringify(data, null, 2));
   return data;
 }
 
