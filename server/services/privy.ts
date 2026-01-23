@@ -199,13 +199,11 @@ export async function signSolanaTransaction(
       console.log(`[Privy] Original sig ${idx}: isZero=${isZero}`);
     });
     
-    // Always reconstruct the transaction to ensure signatures are properly included
-    // The Privy response object may have serialize() but doesn't serialize correctly
-    console.log("[Privy] Reconstructing transaction with signatures from response...");
+    // Copy signatures from response directly into the original transaction
+    console.log("[Privy] Copying signatures from response to original transaction...");
     
     // Extract signatures from the response
     const responseSignatures = (signedTx as any).signatures;
-    const reconstructedSignatures: Uint8Array[] = [];
     
     for (let i = 0; i < responseSignatures.length; i++) {
       const sig = responseSignatures[i];
@@ -226,13 +224,14 @@ export async function signSolanaTransaction(
       }
       
       const isZero = sigBytes.every((b: number) => b === 0);
-      console.log(`[Privy] Reconstructed sig ${i}: isZero=${isZero}, first4=[${sigBytes.slice(0, 4).join(',')}]`);
-      reconstructedSignatures.push(sigBytes);
+      console.log(`[Privy] Sig ${i}: isZero=${isZero}, first4=[${sigBytes.slice(0, 4).join(',')}]`);
+      
+      // Copy signature bytes to original transaction
+      transaction.signatures[i].set(sigBytes);
     }
     
-    // Create a new VersionedTransaction with the original message but signed signatures
-    const reconstructedTx = new VersionedTransaction(transaction.message, reconstructedSignatures);
-    const signedTxBuffer = Buffer.from(reconstructedTx.serialize());
+    // Serialize the modified original transaction
+    const signedTxBuffer = Buffer.from(transaction.serialize());
     
     console.log("[Privy] Signed transaction serialized, length:", signedTxBuffer.length);
     return { signedTransaction: signedTxBuffer.toString("base64") };
