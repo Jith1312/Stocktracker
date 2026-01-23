@@ -67,24 +67,41 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
     // Use server-auth client which authenticates via app secret
     const user = await serverAuthClient.getUser(privyDid);
     
-    if (!user) return null;
+    if (!user) {
+      console.log("[Privy] No user found for DID:", privyDid);
+      return null;
+    }
     
-    // Find the embedded Solana wallet
-    const embeddedWallet = user.linked_accounts.find(
-      (account: any) => account.type === "wallet" && 
-                        account.wallet_client_type === "privy" &&
-                        account.chain_type === "solana"
+    // Log the user data structure for debugging
+    console.log("[Privy] User linked_accounts:", JSON.stringify(user.linked_accounts || user.linkedAccounts, null, 2));
+    
+    // Try both property names (linked_accounts and linkedAccounts)
+    const accounts = user.linked_accounts || (user as any).linkedAccounts || [];
+    
+    if (!accounts || accounts.length === 0) {
+      console.log("[Privy] No linked accounts found for user");
+      return null;
+    }
+    
+    // Find the embedded Solana wallet - check various property name formats
+    const embeddedWallet = accounts.find(
+      (account: any) => {
+        const isWallet = account.type === "wallet";
+        const isPrivy = account.wallet_client_type === "privy" || account.walletClientType === "privy";
+        const isSolana = account.chain_type === "solana" || account.chainType === "solana";
+        return isWallet && isPrivy && isSolana;
+      }
     );
     
-    // The wallet ID for Privy embedded wallets is typically the address
-    // For the Wallet API, we need the wallet's ID field
+    console.log("[Privy] Found embedded wallet:", embeddedWallet);
+    
+    // The wallet ID for Privy embedded wallets
     if (embeddedWallet && 'id' in embeddedWallet) {
       return (embeddedWallet as any).id;
     }
     
     // Fallback: try to get wallet ID from address
     if (embeddedWallet && 'address' in embeddedWallet) {
-      // For Privy Wallet API, the wallet can be referenced by address
       return (embeddedWallet as any).address;
     }
     
