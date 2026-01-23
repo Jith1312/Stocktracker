@@ -335,11 +335,7 @@ export async function getTokenPrices(mints: string[]): Promise<Record<string, nu
     if (mints.length === 0) return {};
     
     const mintList = mints.join(",");
-    const response = await fetch(`https://api.jup.ag/price/v2?ids=${mintList}`, {
-      headers: {
-        ...(JUPITER_API_KEY ? { "x-api-key": JUPITER_API_KEY } : {}),
-      },
-    });
+    const response = await fetch(`https://price.jup.ag/v6/price?ids=${mintList}`);
     
     if (!response.ok) {
       console.error("[Jupiter] Price API error:", response.status);
@@ -349,14 +345,16 @@ export async function getTokenPrices(mints: string[]): Promise<Record<string, nu
     const data = await response.json();
     const prices: Record<string, number> = {};
     
-    for (const [mint, info] of Object.entries(data.data || {})) {
+    for (const [key, info] of Object.entries(data.data || {})) {
       const priceInfo = info as any;
       if (priceInfo?.price) {
+        // Use the mint address (id) as key since that's what we're looking up
+        const mint = priceInfo.id || key;
         prices[mint] = parseFloat(priceInfo.price);
       }
     }
     
-    console.log("[Jupiter] Fetched prices for", Object.keys(prices).length, "tokens");
+    console.log("[Jupiter] Fetched prices for", Object.keys(prices).length, "tokens:", prices);
     return prices;
   } catch (error) {
     console.error("[Jupiter] Error fetching prices:", error);

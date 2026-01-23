@@ -480,15 +480,41 @@ export async function registerRoutes(
       const mints = validHoldings.map(h => h.mint);
       const prices = await jupiter.getTokenPrices(mints);
       
-      // Add USD values
-      const holdingsWithValue = validHoldings.map(h => ({
-        mint: h.mint,
-        symbol: h.symbol,
-        underlyingTicker: h.underlyingTicker,
-        balance: h.balance,
-        usdValue: prices[h.mint] ? h.balanceNum * prices[h.mint] : null,
-        price: prices[h.mint] || null,
-      }));
+      // Fallback: calculate price from recent trades if Jupiter doesn't have it
+      const trades = await storage.getTradesByUser(user.id);
+      const tradePrices: Record<string, number> = {};
+      
+      for (const trade of trades) {
+        // Find buy trades (USDC -> Token) to estimate token price
+        if (trade.inputMint === USDC_MINT && trade.outputMint && trade.amountIn && trade.amountOut) {
+          const usdcAmount = parseFloat(trade.amountIn) / 1_000_000; // USDC has 6 decimals
+          const tokenAmount = parseFloat(trade.amountOut) / 1_000_000_000; // Ondo tokens have 9 decimals
+          if (tokenAmount > 0) {
+            tradePrices[trade.outputMint] = usdcAmount / tokenAmount;
+          }
+        }
+        // Also check sell trades (Token -> USDC) for price
+        if (trade.outputMint === USDC_MINT && trade.inputMint && trade.amountIn && trade.amountOut) {
+          const tokenAmount = parseFloat(trade.amountIn) / 1_000_000_000; // Ondo tokens have 9 decimals
+          const usdcAmount = parseFloat(trade.amountOut) / 1_000_000; // USDC has 6 decimals
+          if (tokenAmount > 0) {
+            tradePrices[trade.inputMint] = usdcAmount / tokenAmount;
+          }
+        }
+      }
+      
+      // Add USD values (prefer Jupiter price, fall back to trade-derived price)
+      const holdingsWithValue = validHoldings.map(h => {
+        const price = prices[h.mint] || tradePrices[h.mint] || null;
+        return {
+          mint: h.mint,
+          symbol: h.symbol,
+          underlyingTicker: h.underlyingTicker,
+          balance: h.balance,
+          usdValue: price ? h.balanceNum * price : null,
+          price: price,
+        };
+      });
       
       res.json(holdingsWithValue);
     } catch (error) {
