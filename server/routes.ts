@@ -546,32 +546,45 @@ export async function registerRoutes(
         balanceNum: number;
       }>;
       
-      // Fetch prices for all held tokens
-      const mints = validHoldings.map(h => h.mint);
-      const prices = await jupiter.getTokenPrices(mints);
+      // Fetch live prices using Jupiter Ultra quote API (most accurate for trading)
+      const prices: Record<string, number> = {};
+      const quoteAmount = "1000000000"; // 1 token (9 decimals for Ondo tokens)
       
-      // Fallback: calculate price from recent trades if Jupiter doesn't have it
+      // Fetch quotes in parallel for all holdings (sell 1 token -> get USDC value)
+      const pricePromises = validHoldings.map(async (holding, index) => {
+        // Stagger requests slightly to avoid rate limits
+        await new Promise(r => setTimeout(r, index * 50));
+        
+        try {
+          const url = `https://api.jup.ag/ultra/v1/order?inputMint=${holding.mint}&outputMint=${USDC_MINT}&amount=${quoteAmount}`;
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (process.env.JUPITER_API_KEY) {
+            headers["x-api-key"] = process.env.JUPITER_API_KEY;
+          }
+          
+          const res = await fetch(url, { 
+            headers,
+            signal: AbortSignal.timeout(8000),
+          });
+          
+          if (res.ok) {
+            const data = await res.json();
+            // outAmount is USDC (6 decimals) for selling 1 token
+            if (data.outAmount) {
+              const usdcOut = parseFloat(data.outAmount) / 1_000_000;
+              prices[holding.mint] = usdcOut; // Price = USDC received for 1 token
+              console.log(`[Portfolio] Live price for ${holding.underlyingTicker}: $${usdcOut.toFixed(2)}`);
+            }
+          }
+        } catch (e) {
+          // Silently skip failed quotes
+        }
+      });
+      
+      await Promise.all(pricePromises);
+      
+      // Get trades for cost basis calculation
       const trades = await storage.getTradesByUser(user.id);
-      const tradePrices: Record<string, number> = {};
-      
-      for (const trade of trades) {
-        // Find buy trades (USDC -> Token) to estimate token price
-        if (trade.inputMint === USDC_MINT && trade.outputMint && trade.amountIn && trade.amountOut) {
-          const usdcAmount = parseFloat(trade.amountIn) / 1_000_000; // USDC has 6 decimals
-          const tokenAmount = parseFloat(trade.amountOut) / 1_000_000_000; // Ondo tokens have 9 decimals
-          if (tokenAmount > 0) {
-            tradePrices[trade.outputMint] = usdcAmount / tokenAmount;
-          }
-        }
-        // Also check sell trades (Token -> USDC) for price
-        if (trade.outputMint === USDC_MINT && trade.inputMint && trade.amountIn && trade.amountOut) {
-          const tokenAmount = parseFloat(trade.amountIn) / 1_000_000_000; // Ondo tokens have 9 decimals
-          const usdcAmount = parseFloat(trade.amountOut) / 1_000_000; // USDC has 6 decimals
-          if (tokenAmount > 0) {
-            tradePrices[trade.inputMint] = usdcAmount / tokenAmount;
-          }
-        }
-      }
       
       // Calculate cost basis from trades for each token
       const costBasisByMint: Record<string, { totalCost: number; totalTokens: number }> = {};
@@ -600,9 +613,9 @@ export async function registerRoutes(
         }
       }
       
-      // Add USD values (prefer Jupiter price, fall back to trade-derived price)
+      // Add USD values using live Jupiter quote prices
       const holdingsWithValue = validHoldings.map(h => {
-        const price = prices[h.mint] || tradePrices[h.mint] || null;
+        const price = prices[h.mint] || null;
         const currentValue = price ? h.balanceNum * price : null;
         
         const costData = costBasisByMint[h.mint];
