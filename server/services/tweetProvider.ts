@@ -80,19 +80,22 @@ export class TwitterApiIoProvider implements TweetProvider {
 
       const data = await response.json();
       
-      console.log(`[TwitterApiIo] Response for @${handle}: status=${data.status}, tweets=${data.tweets?.length || 0}`);
+      // API returns tweets in data.data.tweets
+      const tweetsArray = data.data?.tweets || data.tweets || [];
+      
+      console.log(`[TwitterApiIo] Response for @${handle}: status=${data.status}, tweets=${tweetsArray.length}`);
       
       if (data.status !== "success") {
-        console.log(`[TwitterApiIo] API returned error: ${data.message}`);
+        console.log(`[TwitterApiIo] API returned error: ${data.msg || data.message}`);
         return [];
       }
       
-      if (!data.tweets || data.tweets.length === 0) {
+      if (tweetsArray.length === 0) {
         console.log(`[TwitterApiIo] No tweets returned for @${handle}`);
         return [];
       }
 
-      const tweets = data.tweets
+      const tweets = tweetsArray
         .filter((tweet: any) => {
           if (!tweet.id || !tweet.text) return false;
           if (!sinceId) return true;
