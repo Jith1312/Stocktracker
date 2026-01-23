@@ -84,7 +84,8 @@ export async function getUltraOrder(
 
 export async function executeUltraOrder(
   requestId: string,
-  signedTransaction: string
+  signedTransaction: string,
+  maxRetries: number = 3
 ): Promise<UltraExecuteResponse> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -96,18 +97,41 @@ export async function executeUltraOrder(
   console.log("[Jupiter] Executing ultra order with requestId:", requestId);
   console.log("[Jupiter] Signed transaction length:", signedTransaction.length);
   
-  const response = await fetch(`${JUPITER_API_URL}/ultra/v1/execute`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      requestId,
-      signedTransaction,
-    }),
-  });
+  let lastError: UltraExecuteResponse | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    console.log(`[Jupiter] Execute attempt ${attempt}/${maxRetries}`);
+    
+    const response = await fetch(`${JUPITER_API_URL}/ultra/v1/execute`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        requestId,
+        signedTransaction,
+      }),
+    });
 
-  const data = await response.json();
-  console.log("[Jupiter] Execute response:", JSON.stringify(data, null, 2));
-  return data;
+    const data = await response.json();
+    console.log("[Jupiter] Execute response:", JSON.stringify(data, null, 2));
+    
+    // Success case
+    if (data.status === "Success" || data.signature) {
+      return data;
+    }
+    
+    // Retryable error codes: -2005 (Internal error)
+    if (data.code === -2005 && attempt < maxRetries) {
+      console.log(`[Jupiter] Retryable error, waiting ${attempt * 1000}ms before retry...`);
+      await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+      lastError = data;
+      continue;
+    }
+    
+    // Non-retryable error or max retries reached
+    return data;
+  }
+  
+  return lastError || { status: "Failed", error: "Max retries exceeded" };
 }
 
 export interface V6QuoteResponse {
