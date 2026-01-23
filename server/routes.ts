@@ -561,11 +561,82 @@ export async function registerRoutes(
           text: `📊 <b>StockPulse Bot Commands</b>
 
 /help - Show this message
+/balance - Show your wallet balance
+/portfolio - Show your holdings and trade history
 /mute TICKER - Mute alerts for a ticker
 /unmute TICKER - Unmute alerts for a ticker
 /amount NUMBER - Set default trade amount (e.g., /amount 50)`,
           parseMode: "HTML",
         });
+      }
+
+      if (message?.text === "/balance" || message?.text === "/portfolio") {
+        const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
+        
+        if (!user) {
+          await telegram.sendMessage({
+            chatId: message.chat.id.toString(),
+            text: "❌ Please connect your account first using the link from the app.",
+          });
+        } else if (!user.solanaPubkey) {
+          await telegram.sendMessage({
+            chatId: message.chat.id.toString(),
+            text: "❌ No wallet connected. Please connect a Solana wallet in the app first.",
+          });
+        } else {
+          try {
+            const pubkey = new PublicKey(user.solanaPubkey);
+            
+            const solBalance = await connection.getBalance(pubkey);
+            const solAmount = (solBalance / 1e9).toFixed(4);
+            
+            let usdcBalance = "0.00";
+            try {
+              const usdcMint = new PublicKey(USDC_MINT);
+              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { mint: usdcMint });
+              if (tokenAccounts.value.length > 0) {
+                const balance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+                usdcBalance = balance?.toFixed(2) || "0.00";
+              }
+            } catch (e) {
+              console.error("[Telegram] Error fetching USDC balance:", e);
+            }
+
+            const trades = await storage.getTradesForUser(user.id);
+            const recentTrades = trades.slice(0, 5);
+
+            let portfolioText = `💰 <b>Your Wallet Balance</b>
+
+🟣 SOL: ${solAmount}
+💵 USDC: $${usdcBalance}
+
+📍 Wallet: <code>${user.solanaPubkey.slice(0, 8)}...${user.solanaPubkey.slice(-6)}</code>`;
+
+            if (message?.text === "/portfolio") {
+              if (recentTrades.length > 0) {
+                portfolioText += `\n\n📈 <b>Recent Trades</b>`;
+                for (const trade of recentTrades) {
+                  const date = new Date(trade.executedAt!).toLocaleDateString();
+                  portfolioText += `\n• ${trade.side} $${trade.amountUsd} → ${trade.outputMint?.slice(0, 6)}... (${date})`;
+                }
+              } else {
+                portfolioText += `\n\n📈 <b>Recent Trades</b>\nNo trades yet.`;
+              }
+            }
+
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: portfolioText,
+              parseMode: "HTML",
+            });
+          } catch (error) {
+            console.error("[Telegram] Balance fetch error:", error);
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: "❌ Error fetching balance. Please try again later.",
+            });
+          }
+        }
       }
 
       if (message?.text?.startsWith("/amount ")) {
