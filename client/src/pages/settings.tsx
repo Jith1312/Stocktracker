@@ -22,7 +22,10 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
-const KEY_QUORUM_ID = import.meta.env.VITE_PRIVY_KEY_QUORUM_ID;
+interface AppConfig {
+  keyQuorumId: string | null;
+  authKeyConfigured: boolean;
+}
 
 interface UserProfile {
   id: number;
@@ -49,6 +52,12 @@ export default function Settings() {
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
+  
+  // Fetch config from server (runtime, not build-time)
+  const { data: appConfig } = useQuery<AppConfig>({
+    queryKey: ["/api/config"],
+  });
+  const KEY_QUORUM_ID = appConfig?.keyQuorumId;
   
   // Find the embedded Privy Solana wallet from useWallets hook
   const embeddedWalletFromHook = wallets.find(w => 

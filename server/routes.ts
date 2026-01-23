@@ -129,6 +129,14 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // Public config endpoint for frontend - returns non-sensitive configuration
+  app.get("/api/config", (req: Request, res: Response) => {
+    res.json({
+      keyQuorumId: process.env.VITE_PRIVY_KEY_QUORUM_ID || null,
+      authKeyConfigured: !!process.env.PRIVY_AUTHORIZATION_KEY,
+    });
+  });
+
   app.get("/api/user/profile", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
