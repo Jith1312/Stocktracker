@@ -110,27 +110,104 @@ export async function executeUltraOrder(
   return data;
 }
 
+export interface V6QuoteResponse {
+  inputMint: string;
+  outputMint: string;
+  inAmount: string;
+  outAmount: string;
+  otherAmountThreshold: string;
+  swapMode: string;
+  slippageBps: number;
+  priceImpactPct: string;
+  routePlan: any[];
+}
+
+export interface V6SwapResponse {
+  swapTransaction: string;
+  lastValidBlockHeight: number;
+  prioritizationFeeLamports: number;
+}
+
+export async function getQuoteV6(
+  inputMint: string,
+  outputMint: string,
+  amountRaw: string
+): Promise<V6QuoteResponse> {
+  const url = new URL("https://quote-api.jup.ag/v6/quote");
+  url.searchParams.set("inputMint", inputMint);
+  url.searchParams.set("outputMint", outputMint);
+  url.searchParams.set("amount", amountRaw);
+  url.searchParams.set("slippageBps", "100"); // 1% slippage
+
+  console.log("[Jupiter] Getting v6 quote:", url.toString());
+  const response = await fetch(url.toString());
+  const data = await response.json();
+  
+  if (data.error) {
+    throw new Error(`Jupiter v6 quote error: ${data.error}`);
+  }
+  
+  console.log("[Jupiter] V6 quote received, outAmount:", data.outAmount);
+  return data;
+}
+
+export async function getSwapTransactionV6(
+  quoteResponse: V6QuoteResponse,
+  userPublicKey: string
+): Promise<V6SwapResponse> {
+  console.log("[Jupiter] Getting v6 swap transaction for user:", userPublicKey);
+  
+  const response = await fetch("https://quote-api.jup.ag/v6/swap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      quoteResponse,
+      userPublicKey,
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: "auto",
+    }),
+  });
+
+  const data = await response.json();
+  
+  if (data.error) {
+    throw new Error(`Jupiter v6 swap error: ${data.error}`);
+  }
+  
+  console.log("[Jupiter] V6 swap transaction received");
+  return data;
+}
+
 export async function getQuote(
   inputMint: string,
   outputMint: string,
   amountRaw: string,
   takerAddress?: string
 ): Promise<QuoteResponse> {
-  const ultraOrder = await getUltraOrder(inputMint, outputMint, amountRaw, takerAddress);
+  // Use v6 API instead of Ultra API for more reliability
+  const v6Quote = await getQuoteV6(inputMint, outputMint, amountRaw);
+  
+  // Get swap transaction if taker address provided
+  let transaction: string | null = null;
+  if (takerAddress) {
+    const swapData = await getSwapTransactionV6(v6Quote, takerAddress);
+    transaction = swapData.swapTransaction;
+  }
   
   return {
-    inputMint: ultraOrder.inputMint,
-    outputMint: ultraOrder.outputMint,
-    inAmount: ultraOrder.inAmount,
-    outAmount: ultraOrder.outAmount,
-    otherAmountThreshold: ultraOrder.otherAmountThreshold,
-    swapMode: ultraOrder.swapMode,
-    slippageBps: ultraOrder.slippageBps,
-    priceImpactPct: ultraOrder.priceImpactPct,
-    routePlan: ultraOrder.routePlan,
-    requestId: ultraOrder.requestId,
-    transaction: ultraOrder.transaction,
-    gasless: ultraOrder.gasless,
+    inputMint: v6Quote.inputMint,
+    outputMint: v6Quote.outputMint,
+    inAmount: v6Quote.inAmount,
+    outAmount: v6Quote.outAmount,
+    otherAmountThreshold: v6Quote.otherAmountThreshold,
+    swapMode: v6Quote.swapMode,
+    slippageBps: v6Quote.slippageBps,
+    priceImpactPct: v6Quote.priceImpactPct,
+    routePlan: v6Quote.routePlan,
+    requestId: "", // V6 doesn't use requestId
+    transaction: transaction,
+    gasless: false,
   };
 }
 
