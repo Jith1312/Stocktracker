@@ -30,6 +30,7 @@ StockPulse is a trading alert application that monitors X (Twitter) influencer a
 │   │   │   ├── influencer-detail.tsx   # Influencer detail view
 │   │   │   ├── alerts.tsx              # Alerts feed
 │   │   │   ├── portfolio.tsx           # Holdings & trade history
+│   │   │   ├── settings.tsx            # User settings (one-tap trading)
 │   │   │   ├── admin.tsx               # Asset registry admin
 │   │   │   └── trade-confirm.tsx       # Trade confirmation flow
 │   │   └── App.tsx                     # Router setup
@@ -38,7 +39,8 @@ StockPulse is a trading alert application that monitors X (Twitter) influencer a
 │   │   ├── tweetProvider.ts            # X API / stub provider
 │   │   ├── classifier.ts               # AI tweet classification
 │   │   ├── jupiter.ts                  # Jupiter swap integration
-│   │   └── telegram.ts                 # Telegram bot service
+│   │   ├── telegram.ts                 # Telegram bot service
+│   │   └── privy.ts                    # Privy auth & wallet API service
 │   ├── workers/
 │   │   └── index.ts                    # Background workers (polling, classification)
 │   ├── routes.ts                       # API routes
@@ -80,6 +82,7 @@ StockPulse is a trading alert application that monitors X (Twitter) influencer a
 5. **Jupiter Swaps**: Prepare and execute USDC → Ondo token swaps
 6. **Portfolio Tracking**: View token balances and trade history
 7. **Admin Panel**: Manage asset registry (ticker → mint mappings)
+8. **One-Tap Trading**: Server-side trade execution via Privy delegated actions (optional)
 
 ## Background Workers
 - **Tweet Polling**: Every 2 minutes, polls new tweets from tracked influencers

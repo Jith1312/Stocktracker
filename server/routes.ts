@@ -144,10 +144,26 @@ export async function registerRoutes(
       const user = (req as any).user;
       const { defaultBuyAmountUsd, autoExecuteEnabled } = req.body;
       
-      const updated = await storage.updateUser(user.id, {
-        defaultBuyAmountUsd,
-        autoExecuteEnabled,
-      });
+      const updateData: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean } = {};
+      
+      if (defaultBuyAmountUsd !== undefined) {
+        const amount = parseFloat(defaultBuyAmountUsd);
+        if (isNaN(amount) || amount <= 0 || amount > 10000) {
+          res.status(400).json({ error: "Invalid amount. Must be between $1 and $10,000" });
+          return;
+        }
+        updateData.defaultBuyAmountUsd = amount.toString();
+      }
+      
+      if (autoExecuteEnabled !== undefined) {
+        if (typeof autoExecuteEnabled !== 'boolean') {
+          res.status(400).json({ error: "Invalid autoExecuteEnabled value" });
+          return;
+        }
+        updateData.autoExecuteEnabled = autoExecuteEnabled;
+      }
+      
+      const updated = await storage.updateUser(user.id, updateData);
       
       res.json(updated);
     } catch (error) {
@@ -173,13 +189,18 @@ export async function registerRoutes(
   app.post("/api/user/enable-signer", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const privyUser = await privy.getUser((req as any).privyUserId);
       
-      const embeddedWallet = privyUser?.linkedAccounts?.find(
-        (account: any) => account.type === "wallet" && account.walletClientType === "privy"
-      );
+      if (!process.env.PRIVY_AUTHORIZATION_KEY) {
+        res.status(400).json({ error: "Server-side signing not configured. Please contact support." });
+        return;
+      }
       
-      const walletId = (embeddedWallet as any)?.id || null;
+      const walletId = await privy.getEmbeddedWalletId((req as any).privyUserId);
+      
+      if (!walletId) {
+        res.status(400).json({ error: "No embedded wallet found. Please create a wallet first." });
+        return;
+      }
       
       await storage.updateUser(user.id, { 
         signerEnabled: true,

@@ -1,5 +1,5 @@
 import { PrivyClient as ServerAuthClient } from "@privy-io/server-auth";
-import { Privy, isEmbeddedWalletLinkedAccount } from "@privy-io/node";
+import { PrivyClient, isEmbeddedWalletLinkedAccount } from "@privy-io/node";
 import crypto from "crypto";
 
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID!;
@@ -12,9 +12,9 @@ if (!PRIVY_APP_ID || !PRIVY_APP_SECRET) {
 
 const serverAuthClient = new ServerAuthClient(PRIVY_APP_ID, PRIVY_APP_SECRET);
 
-let privyNodeClient: Privy | null = null;
+let privyNodeClient: PrivyClient | null = null;
 
-function getPrivyNodeClient(): Privy {
+function getPrivyNodeClient(): PrivyClient {
   if (!privyNodeClient) {
     const config: any = {
       appId: PRIVY_APP_ID,
@@ -26,7 +26,7 @@ function getPrivyNodeClient(): Privy {
       console.log("[Privy] Initialized with authorization key for delegated actions");
     }
     
-    privyNodeClient = new Privy(config);
+    privyNodeClient = new PrivyClient(config);
   }
   return privyNodeClient;
 }
