@@ -724,16 +724,17 @@ export async function registerRoutes(
               outputMint = USDC_MINT;
             }
             
-            const quote = await jupiter.getQuote(inputMint, outputMint, amountRaw);
+            const quote = await jupiter.getQuote(inputMint, outputMint, amountRaw, user.solanaPubkey);
             
             const preparedOrder = await storage.createPreparedOrder({
               userId: user.id,
               userAlertId: parseInt(userAlertId),
-              side: tradeAction,
               inputMint,
               outputMint,
-              amountUsd: amountUsd.toString(),
-              quoteResponse: quote,
+              amountIn: amountRaw,
+              quoteJson: quote,
+              swapTxBase64: quote.transaction || undefined,
+              expiresAt: new Date(Date.now() + 60000),
               status: "PENDING",
             });
             
