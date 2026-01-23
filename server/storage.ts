@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, and, isNull, lt, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, lt, gte, sql } from "drizzle-orm";
 import {
   users, influencers, subscriptions, tweets, classifications,
   alertEvents, userAlerts, preparedOrders, trades, assetRegistry,
@@ -52,6 +52,7 @@ export interface IStorage {
 
   getAlertEvent(id: number): Promise<AlertEvent | undefined>;
   createAlertEvent(alertEvent: InsertAlertEvent): Promise<AlertEvent>;
+  getRecentAlertEventsForInfluencer(influencerId: number, hoursBack: number): Promise<AlertEvent[]>;
 
   getUserAlert(id: number): Promise<UserAlert | undefined>;
   getUserAlertsByUser(userId: number, limit?: number): Promise<UserAlert[]>;
@@ -226,6 +227,30 @@ export class DatabaseStorage implements IStorage {
   async createAlertEvent(insertAlertEvent: InsertAlertEvent): Promise<AlertEvent> {
     const [alertEvent] = await db.insert(alertEvents).values(insertAlertEvent).returning();
     return alertEvent;
+  }
+
+  async getRecentAlertEventsForInfluencer(influencerId: number, hoursBack: number): Promise<AlertEvent[]> {
+    const cutoffTime = new Date(Date.now() - hoursBack * 60 * 60 * 1000);
+    return await db
+      .select({
+        id: alertEvents.id,
+        tweetId: alertEvents.tweetId,
+        classificationId: alertEvents.classificationId,
+        ticker: alertEvents.ticker,
+        sentiment: alertEvents.sentiment,
+        action: alertEvents.action,
+        confidence: alertEvents.confidence,
+        createdAt: alertEvents.createdAt,
+      })
+      .from(alertEvents)
+      .innerJoin(tweets, eq(alertEvents.tweetId, tweets.id))
+      .where(
+        and(
+          eq(tweets.influencerId, influencerId),
+          gte(alertEvents.createdAt, cutoffTime)
+        )
+      )
+      .orderBy(desc(alertEvents.createdAt));
   }
 
   async getUserAlert(id: number): Promise<UserAlert | undefined> {

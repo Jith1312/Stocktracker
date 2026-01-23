@@ -22,6 +22,103 @@ const APP_URL = getAppDomain().includes("localhost")
   ? `http://${getAppDomain()}`
   : `https://${getAppDomain()}`;
 
+// Send backfill alerts to a user for recent alert events from an influencer
+// Called when a user subscribes to an influencer to catch up on recent signals
+export async function sendBackfillAlerts(userId: number, influencerId: number): Promise<number> {
+  try {
+    const user = await storage.getUser(userId);
+    if (!user?.telegramChatId) {
+      console.log(`[Worker] Backfill skipped: user ${userId} has no Telegram connected`);
+      return 0;
+    }
+
+    const influencer = await storage.getInfluencer(influencerId);
+    if (!influencer) {
+      console.log(`[Worker] Backfill skipped: influencer ${influencerId} not found`);
+      return 0;
+    }
+
+    // Get recent alert events from this influencer's tweets (last 24 hours)
+    const recentAlertEvents = await storage.getRecentAlertEventsForInfluencer(influencerId, 24);
+    
+    let sentCount = 0;
+    const mutedTickers = await storage.getMutedTickers(userId);
+
+    for (const alertEvent of recentAlertEvents) {
+      // Skip if ticker is muted
+      if (mutedTickers.some(m => m.ticker === alertEvent.ticker)) continue;
+
+      // Skip if user already has an alert for this event
+      const existingAlerts = await storage.getUserAlertsByEvent(alertEvent.id);
+      if (existingAlerts.some(a => a.userId === userId)) continue;
+
+      // Get the tweet for this alert
+      const tweet = await storage.getTweet(alertEvent.tweetId);
+      if (!tweet) continue;
+
+      // Create user alert
+      const userAlert = await storage.createUserAlert({
+        userId,
+        alertEventId: alertEvent.id,
+        status: "SENT",
+      });
+
+      // Format and send message
+      const message = telegram.formatAlertMessage(
+        influencer.handle,
+        alertEvent.ticker,
+        alertEvent.action || "NONE",
+        parseFloat(alertEvent.confidence || "1.0"),
+        tweet.text,
+        tweet.url,
+        tweet.tweetCreatedAt || tweet.ingestedAt
+      );
+
+      const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
+      
+      let userHoldsStock = false;
+      if (user.solanaPubkey) {
+        try {
+          const asset = await storage.getAssetByTicker(alertEvent.ticker);
+          if (asset) {
+            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+            userHoldsStock = parseFloat(jupiter.rawAmountToDisplay(balance.balance, balance.decimals)) > 0;
+          }
+        } catch (e) {
+          console.log(`[Worker] Backfill: error checking holdings for ${alertEvent.ticker}:`, e);
+        }
+      }
+      
+      const buttons = telegram.createTradeButtons(
+        userAlert.id, 
+        APP_URL, 
+        (alertEvent.action || "NONE") as "BUY" | "SELL",
+        defaultAmount,
+        userHoldsStock
+      );
+
+      const sentMessage = await telegram.sendMessage({
+        chatId: user.telegramChatId,
+        text: message,
+        replyMarkup: { inline_keyboard: buttons },
+      });
+
+      if (sentMessage) {
+        await storage.updateUserAlert(userAlert.id, {
+          telegramMessageId: sentMessage.message_id.toString(),
+        });
+        sentCount++;
+      }
+    }
+
+    console.log(`[Worker] Backfill: sent ${sentCount} alerts to user ${userId} for @${influencer.handle}`);
+    return sentCount;
+  } catch (error) {
+    console.error(`[Worker] Backfill error for user ${userId}, influencer ${influencerId}:`, error);
+    return 0;
+  }
+}
+
 // Poll tweets for a single influencer - used for instant polling when user adds an influencer
 export async function pollInfluencerTweets(influencerId: number): Promise<number> {
   try {
