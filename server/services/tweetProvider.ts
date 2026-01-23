@@ -7,7 +7,7 @@ export interface TweetData {
 }
 
 export interface TweetProvider {
-  fetchTweets(handle: string, sinceId?: string): Promise<TweetData[]>;
+  fetchTweets(handle: string, sinceId?: string, userId?: string): Promise<TweetData[]>;
   getUserInfo(handle: string): Promise<{ userId?: string; displayName?: string; avatarUrl?: string } | null>;
 }
 
@@ -48,13 +48,18 @@ export class TwitterApiIoProvider implements TweetProvider {
     this.lastRequestTime = Date.now();
   }
 
-  async fetchTweets(handle: string, sinceId?: string): Promise<TweetData[]> {
+  async fetchTweets(handle: string, sinceId?: string, userId?: string): Promise<TweetData[]> {
     try {
       await this.waitForRateLimit();
       
-      const url = `${this.baseUrl}/twitter/user/last_tweets?userName=${encodeURIComponent(handle)}&includeReplies=false`;
-      
-      console.log(`[TwitterApiIo] Fetching tweets for @${handle}...`);
+      let url: string;
+      if (userId) {
+        url = `${this.baseUrl}/twitter/user/last_tweets?userId=${encodeURIComponent(userId)}`;
+        console.log(`[TwitterApiIo] Fetching tweets for userId ${userId} (@${handle})...`);
+      } else {
+        url = `${this.baseUrl}/twitter/user/last_tweets?userName=${encodeURIComponent(handle)}`;
+        console.log(`[TwitterApiIo] Fetching tweets for @${handle}...`);
+      }
       
       const response = await fetch(url, {
         headers: {
@@ -75,10 +80,15 @@ export class TwitterApiIoProvider implements TweetProvider {
 
       const data = await response.json();
       
-      console.log(`[TwitterApiIo] Response status: ${data.status}, tweet count: ${data.tweets?.length || 0}`);
+      console.log(`[TwitterApiIo] Response for @${handle}: status=${data.status}, tweets=${data.tweets?.length || 0}`);
       
-      if (data.status !== "success" || !data.tweets || data.tweets.length === 0) {
-        console.log(`[TwitterApiIo] No tweets found for @${handle}: ${data.message || "empty response"}`);
+      if (data.status !== "success") {
+        console.log(`[TwitterApiIo] API returned error: ${data.message}`);
+        return [];
+      }
+      
+      if (!data.tweets || data.tweets.length === 0) {
+        console.log(`[TwitterApiIo] No tweets returned for @${handle}`);
         return [];
       }
 
@@ -91,7 +101,7 @@ export class TwitterApiIoProvider implements TweetProvider {
         .map((tweet: any) => ({
           tweetId: tweet.id,
           text: tweet.text,
-          url: tweet.url || `https://x.com/${handle}/status/${tweet.id}`,
+          url: tweet.url || `https://x.com/${tweet.author?.userName || handle}/status/${tweet.id}`,
           createdAt: new Date(tweet.createdAt),
           rawJson: tweet,
         }));
@@ -109,6 +119,7 @@ export class TwitterApiIoProvider implements TweetProvider {
       await this.waitForRateLimit();
       
       const url = `${this.baseUrl}/twitter/user/info?userName=${encodeURIComponent(handle)}`;
+      console.log(`[TwitterApiIo] Fetching user info for @${handle}...`);
       
       const response = await fetch(url, {
         headers: {
@@ -134,6 +145,8 @@ export class TwitterApiIoProvider implements TweetProvider {
         return null;
       }
 
+      console.log(`[TwitterApiIo] Found user @${handle}: id=${data.data.id}, name=${data.data.name}`);
+      
       return {
         userId: data.data.id,
         displayName: data.data.name,

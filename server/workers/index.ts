@@ -19,7 +19,8 @@ async function pollTweetsWorker() {
       try {
         const tweets = await tweetProvider.fetchTweets(
           influencer.handle,
-          influencer.lastTweetId || undefined
+          influencer.lastTweetId || undefined,
+          influencer.platformUserId || undefined
         );
 
         if (tweets.length === 0) continue;
