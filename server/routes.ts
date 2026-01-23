@@ -511,7 +511,7 @@ export async function registerRoutes(
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
-      const botUsername = "StockPulseBot";
+      const botUsername = "copeitbot";
       const deepLink = `https://t.me/${botUsername}?start=${token}`;
       
       res.json({ deepLink, token });
