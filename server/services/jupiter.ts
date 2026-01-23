@@ -1,6 +1,6 @@
 import { Connection, VersionedTransaction, PublicKey } from "@solana/web3.js";
 
-const JUPITER_API_URL = "https://api.jup.ag";
+const JUPITER_API_URL = "https://lite-api.jup.ag";
 
 export interface QuoteResponse {
   inputMint: string;
