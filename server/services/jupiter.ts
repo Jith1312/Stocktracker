@@ -143,8 +143,10 @@ export async function getQuoteV6(
   const response = await fetch(url.toString());
   const data = await response.json();
   
-  if (data.error) {
-    throw new Error(`Jupiter v6 quote error: ${data.error}`);
+  console.log("[Jupiter] V6 quote raw response:", JSON.stringify(data).substring(0, 500));
+  
+  if (data.error || data.code) {
+    throw new Error(`Jupiter v6 quote error: ${data.error || data.message}`);
   }
   
   console.log("[Jupiter] V6 quote received, outAmount:", data.outAmount);
@@ -171,11 +173,13 @@ export async function getSwapTransactionV6(
 
   const data = await response.json();
   
-  if (data.error) {
-    throw new Error(`Jupiter v6 swap error: ${data.error}`);
+  console.log("[Jupiter] V6 swap raw response:", JSON.stringify(data).substring(0, 500));
+  
+  if (data.error || data.code) {
+    throw new Error(`Jupiter v6 swap error: ${data.error || data.message}`);
   }
   
-  console.log("[Jupiter] V6 swap transaction received");
+  console.log("[Jupiter] V6 swap transaction received, has swapTransaction:", !!data.swapTransaction);
   return data;
 }
 

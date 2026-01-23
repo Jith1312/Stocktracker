@@ -777,6 +777,13 @@ export async function registerRoutes(
                                    user.privyWalletId &&
                                    privyService.isAuthorizationKeyConfigured();
             
+            console.log("[Trade] canAutoExecute:", canAutoExecute, {
+              signerEnabled: user.signerEnabled,
+              autoExecuteEnabled: user.autoExecuteEnabled,
+              privyWalletId: user.privyWalletId,
+              authKeyConfigured: privyService.isAuthorizationKeyConfigured()
+            });
+            
             if (canAutoExecute) {
               await telegram.editMessageText(
                 chatId,
