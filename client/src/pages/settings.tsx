@@ -1,5 +1,6 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { usePrivy } from "@privy-io/react-auth";
+import { usePrivy, useDelegatedActions } from "@privy-io/react-auth";
+import { useSolanaWallets } from "@privy-io/react-auth/solana";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -44,9 +45,21 @@ interface SignerStatus {
 
 export default function Settings() {
   const { user, authenticated } = usePrivy();
+  const { wallets } = useSolanaWallets();
+  const { delegateWallet } = useDelegatedActions();
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
+  
+  // Find the embedded Privy wallet
+  const embeddedWallet = wallets.find(w => w.walletClientType === "privy");
+  
+  // Check if wallet is already delegated
+  const isWalletDelegated = user?.linkedAccounts?.some(
+    (account: any) => account.type === "wallet" && 
+                       account.walletClientType === "privy" && 
+                       account.delegated === true
+  );
 
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
     queryKey: ["/api/user/profile"],
@@ -94,15 +107,11 @@ export default function Settings() {
     },
   });
 
-  const hasEmbeddedWallet = !!user?.wallet?.address;
-
   const handleEnableOneTap = async () => {
-    if (!hasEmbeddedWallet || !KEY_QUORUM_ID) {
+    if (!embeddedWallet) {
       toast({
-        title: "Setup incomplete",
-        description: KEY_QUORUM_ID 
-          ? "Please connect your wallet first." 
-          : "One-tap trading is not configured for this app.",
+        title: "No wallet found",
+        description: "Please create a wallet first by connecting your account.",
         variant: "destructive",
       });
       return;
@@ -110,6 +119,17 @@ export default function Settings() {
 
     setIsAddingSigner(true);
     try {
+      // Step 1: Delegate the wallet (client-side) if not already delegated
+      if (!isWalletDelegated) {
+        console.log("[Settings] Delegating wallet:", embeddedWallet.address);
+        await delegateWallet({
+          address: embeddedWallet.address,
+          chainType: "solana",
+        });
+        console.log("[Settings] Wallet delegated successfully");
+      }
+      
+      // Step 2: Enable server-side signer
       await enableSignerMutation.mutateAsync();
 
       toast({
@@ -146,7 +166,7 @@ export default function Settings() {
   };
 
   const isSignerEnabled = profile?.signerEnabled || signerConfig?.signerEnabled;
-  const canEnableOneTap = !!KEY_QUORUM_ID && hasEmbeddedWallet;
+  const canEnableOneTap = !!embeddedWallet;
 
   return (
     <AppLayout>
