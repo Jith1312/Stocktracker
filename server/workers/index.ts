@@ -10,9 +10,17 @@ import type { ClassificationResult } from "@shared/schema";
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
 const connection = new Connection(SOLANA_RPC_URL);
 
-const APP_URL = process.env.REPLIT_DEV_DOMAIN 
-  ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-  : "http://localhost:5000";
+function getAppDomain(): string {
+  // Priority: custom APP_DOMAIN > deployment domain > dev domain
+  if (process.env.APP_DOMAIN) return process.env.APP_DOMAIN;
+  if (process.env.REPLIT_DEPLOYMENT_DOMAIN) return process.env.REPLIT_DEPLOYMENT_DOMAIN;
+  if (process.env.REPLIT_DEV_DOMAIN) return process.env.REPLIT_DEV_DOMAIN;
+  return "localhost:5000";
+}
+
+const APP_URL = getAppDomain().includes("localhost") 
+  ? `http://${getAppDomain()}`
+  : `https://${getAppDomain()}`;
 
 async function pollTweetsWorker() {
   console.log("[Worker] Starting tweet poll...");
@@ -204,8 +212,8 @@ async function sendAlertsForEvent(
 }
 
 async function setupTelegramWebhook() {
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
-  if (!domain) {
+  const domain = getAppDomain();
+  if (domain === "localhost:5000") {
     console.log("[Telegram] No domain configured, skipping webhook setup");
     return;
   }

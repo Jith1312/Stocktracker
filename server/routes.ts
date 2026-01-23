@@ -1817,7 +1817,7 @@ export async function registerRoutes(
 
   app.post("/api/admin/telegram/setup-webhook", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
-      const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+      const domain = process.env.APP_DOMAIN || process.env.REPLIT_DEPLOYMENT_DOMAIN || process.env.REPLIT_DEV_DOMAIN;
       if (!domain) {
         return res.status(400).json({ error: "No domain configured" });
       }
