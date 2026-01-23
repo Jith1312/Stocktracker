@@ -125,17 +125,13 @@ export async function signAndSendSolanaTransaction(
     
     console.log("[Privy] Signing transaction for wallet ID:", walletId);
     
-    // Use the wallets RPC endpoint with correct signature: rpc(walletId, params)
-    const response = await (privy as any).wallets().rpc(walletId, {
-      method: "signAndSendTransaction",
-      params: {
-        transaction: transactionBase64,
-        encoding: "base64",
-      },
+    // Use the dedicated Solana signAndSendTransaction method
+    const response = await privy.wallets().solana().signAndSendTransaction(walletId, {
+      transaction: transactionBase64,
     });
     
     console.log("[Privy] Transaction sent successfully:", response);
-    return { signature: response.data?.hash || response.hash || response.signature || response.transactionHash };
+    return { signature: response.transaction_hash || response.transactionHash || (response as any).hash };
   } catch (error: any) {
     console.error("[Privy] Failed to sign and send transaction:", error);
     return { error: error.message || "Failed to execute transaction" };
