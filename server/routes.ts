@@ -40,11 +40,19 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
       const solanaPubkey = privyUser?.wallet?.address || null;
       
       if (!user) {
-        user = await storage.createUser({ 
-          privyId: verifiedClaims.userId,
-          email,
-          solanaPubkey,
-        });
+        try {
+          user = await storage.createUser({ 
+            privyId: verifiedClaims.userId,
+            email,
+            solanaPubkey,
+          });
+        } catch (createError: any) {
+          if (createError?.code === '23505') {
+            user = await storage.getUserByPrivyId(verifiedClaims.userId);
+          } else {
+            throw createError;
+          }
+        }
       } else {
         const needsUpdate = 
           (email && email !== user.email) || 
@@ -60,12 +68,24 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
     } catch (privyError) {
       console.error("[Auth] Privy user fetch error:", privyError);
       if (!user) {
-        user = await storage.createUser({ 
-          privyId: verifiedClaims.userId,
-          email: null,
-          solanaPubkey: null,
-        });
+        try {
+          user = await storage.createUser({ 
+            privyId: verifiedClaims.userId,
+            email: null,
+            solanaPubkey: null,
+          });
+        } catch (createError: any) {
+          if (createError?.code === '23505') {
+            user = await storage.getUserByPrivyId(verifiedClaims.userId);
+          } else {
+            throw createError;
+          }
+        }
       }
+    }
+    
+    if (!user) {
+      return res.status(401).json({ error: "Failed to get or create user" });
     }
     
     (req as any).user = user;

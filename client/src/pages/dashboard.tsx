@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { usePrivy } from "@privy-io/react-auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,23 +12,29 @@ import {
   Plus,
   ExternalLink,
   Copy,
-  Check
+  Check,
+  Loader2
 } from "lucide-react";
 import { SiTelegram, SiSolana } from "react-icons/si";
 import { Link } from "wouter";
 import { useState } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Dashboard() {
-  const { user } = usePrivy();
+  const { user, authenticated } = usePrivy();
   const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
 
   const { data: profile, isLoading: profileLoading } = useQuery({
     queryKey: ["/api/user/profile"],
+    enabled: authenticated,
   });
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["/api/user/stats"],
+    enabled: authenticated,
   });
 
   const { data: recentAlerts, isLoading: alertsLoading } = useQuery({
@@ -44,6 +50,29 @@ export default function Dashboard() {
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
+  const connectTelegramMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("GET", "/api/telegram/link");
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.deepLink) {
+        window.open(data.deepLink, "_blank");
+        toast({
+          title: "Opening Telegram",
+          description: "Click 'Start' in the Telegram bot to complete the connection.",
+        });
+      }
+    },
+    onError: () => {
+      toast({
+        title: "Connection failed",
+        description: "Could not generate Telegram link. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
 
   return (
     <AppLayout>
@@ -205,9 +234,15 @@ export default function Dashboard() {
                 variant={profile?.telegramChatId ? "outline" : "default"} 
                 className="w-full"
                 data-testid="button-connect-telegram"
+                onClick={() => connectTelegramMutation.mutate()}
+                disabled={connectTelegramMutation.isPending || !authenticated}
               >
-                <SiTelegram className="w-4 h-4 mr-2" />
-                {profile?.telegramChatId ? "Manage Connection" : "Connect Telegram"}
+                {connectTelegramMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <SiTelegram className="w-4 h-4 mr-2" />
+                )}
+                {profile?.telegramChatId ? "Reconnect Telegram" : "Connect Telegram"}
               </Button>
             </CardContent>
           </Card>
