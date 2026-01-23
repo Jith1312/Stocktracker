@@ -616,7 +616,7 @@ export async function registerRoutes(
               console.error("[Telegram] Error fetching USDC balance:", e);
             }
 
-            const trades = await storage.getTradesForUser(user.id);
+            const trades = await storage.getTradesByUser(user.id);
             const recentTrades = trades.slice(0, 5);
 
             let portfolioText = `💰 <b>Your Wallet Balance</b>
