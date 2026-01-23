@@ -652,5 +652,42 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/telegram/setup-webhook", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+      if (!domain) {
+        return res.status(400).json({ error: "No domain configured" });
+      }
+      
+      const webhookUrl = `https://${domain}/api/telegram/webhook`;
+      const success = await telegram.setWebhook(webhookUrl);
+      
+      if (success) {
+        res.json({ success: true, webhookUrl });
+      } else {
+        res.status(500).json({ error: "Failed to set webhook" });
+      }
+    } catch (error) {
+      console.error("[API] Setup webhook error:", error);
+      res.status(500).json({ error: "Failed to setup webhook" });
+    }
+  });
+
+  app.get("/api/admin/telegram/webhook-info", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const botToken = process.env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        return res.status(400).json({ error: "No bot token configured" });
+      }
+      
+      const response = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`);
+      const data = await response.json();
+      res.json(data);
+    } catch (error) {
+      console.error("[API] Get webhook info error:", error);
+      res.status(500).json({ error: "Failed to get webhook info" });
+    }
+  });
+
   return httpServer;
 }

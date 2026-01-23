@@ -166,8 +166,33 @@ async function sendAlertsForEvent(
   }
 }
 
+async function setupTelegramWebhook() {
+  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS?.split(",")[0];
+  if (!domain) {
+    console.log("[Telegram] No domain configured, skipping webhook setup");
+    return;
+  }
+  
+  if (!process.env.TELEGRAM_BOT_TOKEN) {
+    console.log("[Telegram] No bot token configured, skipping webhook setup");
+    return;
+  }
+
+  const webhookUrl = `https://${domain}/api/telegram/webhook`;
+  console.log(`[Telegram] Setting up webhook: ${webhookUrl}`);
+  
+  const success = await telegram.setWebhook(webhookUrl);
+  if (success) {
+    console.log("[Telegram] Webhook configured successfully");
+  } else {
+    console.error("[Telegram] Failed to configure webhook");
+  }
+}
+
 export function startWorkers() {
   console.log("[Workers] Starting background jobs...");
+
+  setupTelegramWebhook();
 
   cron.schedule("*/2 * * * *", pollTweetsWorker);
   console.log("[Workers] Tweet poll job scheduled (every 2 minutes)");
