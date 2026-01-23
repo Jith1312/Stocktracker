@@ -331,33 +331,76 @@ export async function getTokenBalance(
 }
 
 export async function getTokenPrices(mints: string[]): Promise<Record<string, number>> {
+  const prices: Record<string, number> = {};
+  
   try {
     if (mints.length === 0) return {};
     
+    // Try Jupiter Price API first
     const mintList = mints.join(",");
-    const response = await fetch(`https://price.jup.ag/v6/price?ids=${mintList}`);
+    const response = await fetch(`https://price.jup.ag/v6/price?ids=${mintList}`, {
+      signal: AbortSignal.timeout(5000),
+    });
     
-    if (!response.ok) {
-      console.error("[Jupiter] Price API error:", response.status);
-      return {};
-    }
-    
-    const data = await response.json();
-    const prices: Record<string, number> = {};
-    
-    for (const [key, info] of Object.entries(data.data || {})) {
-      const priceInfo = info as any;
-      if (priceInfo?.price) {
-        // Use the mint address (id) as key since that's what we're looking up
-        const mint = priceInfo.id || key;
-        prices[mint] = parseFloat(priceInfo.price);
+    if (response.ok) {
+      const data = await response.json();
+      for (const [key, info] of Object.entries(data.data || {})) {
+        const priceInfo = info as any;
+        if (priceInfo?.price) {
+          const mint = priceInfo.id || key;
+          prices[mint] = parseFloat(priceInfo.price);
+        }
       }
     }
-    
-    console.log("[Jupiter] Fetched prices for", Object.keys(prices).length, "tokens:", prices);
-    return prices;
   } catch (error) {
-    console.error("[Jupiter] Error fetching prices:", error);
-    return {};
+    console.log("[Jupiter] Price API unavailable, using quote-based pricing");
   }
+  
+  // For any missing prices, get them via Ultra quote API
+  const missingMints = mints.filter(m => !prices[m]);
+  if (missingMints.length > 0) {
+    const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const quoteAmount = "1000000"; // 1 USDC (6 decimals)
+    
+    // Fetch quotes in parallel with rate limiting
+    const quotePromises = missingMints.map(async (mint, index) => {
+      // Stagger requests slightly to avoid rate limits
+      await new Promise(r => setTimeout(r, index * 100));
+      
+      try {
+        const url = `https://api.jup.ag/ultra/v1/order?inputMint=${USDC_MINT}&outputMint=${mint}&amount=${quoteAmount}`;
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        };
+        if (process.env.JUPITER_API_KEY) {
+          headers["x-api-key"] = process.env.JUPITER_API_KEY;
+        }
+        
+        const res = await fetch(url, { 
+          headers,
+          signal: AbortSignal.timeout(8000),
+        });
+        
+        if (res.ok) {
+          const data = await res.json();
+          // outAmount is in token decimals (usually 9 for Ondo tokens)
+          // We sent 1 USDC, so price = 1 / (outAmount / 10^decimals)
+          if (data.outAmount) {
+            const outAmount = parseFloat(data.outAmount) / 1_000_000_000; // 9 decimals for Ondo
+            if (outAmount > 0) {
+              prices[mint] = 1 / outAmount; // Price in USD per token
+              console.log(`[Jupiter] Quote price for ${mint}: $${prices[mint].toFixed(2)}`);
+            }
+          }
+        }
+      } catch (e) {
+        // Silently skip failed quotes
+      }
+    });
+    
+    await Promise.all(quotePromises);
+  }
+  
+  console.log("[Jupiter] Fetched prices for", Object.keys(prices).length, "tokens");
+  return prices;
 }
