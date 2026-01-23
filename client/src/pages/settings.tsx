@@ -153,19 +153,33 @@ export default function Settings() {
     setIsAddingSigner(true);
     try {
       // Step 1: Add session signer for TEE wallets (replaces delegateWallet for on-device)
-      if (!hasSessionSigner) {
+      // Skip if already enabled in database (signer was already added previously)
+      const alreadyEnabled = profile?.signerEnabled || signerConfig?.signerEnabled;
+      if (!hasSessionSigner && !alreadyEnabled) {
         console.log("[Settings] Adding session signer for wallet:", embeddedWalletAddress);
         console.log("[Settings] Using signer ID:", KEY_QUORUM_ID);
-        await addSessionSigners({
-          address: embeddedWalletAddress,
-          signers: [
-            {
-              signerId: KEY_QUORUM_ID,
-              policyIds: [], // No policy restrictions
-            },
-          ],
-        });
-        console.log("[Settings] Session signer added successfully");
+        try {
+          await addSessionSigners({
+            address: embeddedWalletAddress,
+            signers: [
+              {
+                signerId: KEY_QUORUM_ID,
+                policyIds: [], // No policy restrictions
+              },
+            ],
+          });
+          console.log("[Settings] Session signer added successfully");
+        } catch (signerError: any) {
+          // If it's a duplicate signer error, we can continue since it already exists
+          if (signerError?.message?.toLowerCase().includes('duplicate') || 
+              signerError?.message?.toLowerCase().includes('already')) {
+            console.log("[Settings] Session signer already exists, continuing...");
+          } else {
+            throw signerError;
+          }
+        }
+      } else {
+        console.log("[Settings] Skipping session signer add - already enabled:", { hasSessionSigner, alreadyEnabled });
       }
       
       // Step 2: Enable server-side signer in our database
