@@ -703,6 +703,55 @@ export async function registerRoutes(
     }
   });
 
+  // Get sell quote (preview without executing)
+  app.post("/api/trade/sell-quote", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { ticker } = req.body;
+      
+      if (!user.solanaPubkey) {
+        return res.status(400).json({ error: "Wallet not configured" });
+      }
+      
+      const asset = await storage.getAssetByTicker(ticker);
+      if (!asset) {
+        return res.status(404).json({ error: `Asset ${ticker} not found` });
+      }
+      
+      // Get actual token balance from chain
+      const tokenBalance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+      if (tokenBalance.balance === "0") {
+        return res.status(400).json({ error: `No ${ticker} balance to sell` });
+      }
+      
+      console.log(`[SellQuote] Getting quote to sell ${tokenBalance.balance} raw of ${ticker}`);
+      
+      // Get quote from Jupiter Ultra
+      const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, tokenBalance.balance, user.solanaPubkey);
+      
+      // Convert raw amounts to display values
+      const inputDecimals = asset.decimals || 9;
+      const inputAmount = parseFloat(tokenBalance.balance) / Math.pow(10, inputDecimals);
+      const outputAmount = parseFloat(quote.outAmount) / Math.pow(10, 6); // USDC has 6 decimals
+      
+      res.json({
+        ticker,
+        symbol: asset.symbol,
+        inputMint: asset.solanaMint,
+        outputMint: USDC_MINT,
+        inputAmount: inputAmount.toFixed(6),
+        outputAmount: outputAmount.toFixed(2),
+        rawInputAmount: tokenBalance.balance,
+        rawOutputAmount: quote.outAmount,
+        priceImpactPct: quote.priceImpactPct,
+        hasTransaction: !!quote.transaction,
+      });
+    } catch (error: any) {
+      console.error("[API] Sell quote error:", error);
+      res.status(500).json({ error: error.message || "Failed to get sell quote" });
+    }
+  });
+
   // Sell tokens back to USDC
   app.post("/api/trade/sell", authMiddleware, async (req: Request, res: Response) => {
     try {

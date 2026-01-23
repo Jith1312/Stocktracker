@@ -17,10 +17,12 @@ import {
   ExternalLink,
   ArrowUpRight,
   ArrowDownRight,
+  ArrowRight,
   Clock,
   Loader2,
   DollarSign,
-  Send
+  Send,
+  AlertCircle
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
@@ -30,6 +32,14 @@ import { useState, useEffect } from "react";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
+interface SellQuote {
+  ticker: string;
+  symbol: string;
+  inputAmount: string;
+  outputAmount: string;
+  priceImpactPct: string;
+}
+
 export default function Portfolio() {
   const { authenticated, ready } = usePrivy();
   const { toast } = useToast();
@@ -38,6 +48,11 @@ export default function Portfolio() {
   const [transferToken, setTransferToken] = useState<string>(USDC_MINT);
   const [transferRecipient, setTransferRecipient] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
+  
+  // Sell confirmation dialog state
+  const [sellDialogOpen, setSellDialogOpen] = useState(false);
+  const [sellQuote, setSellQuote] = useState<SellQuote | null>(null);
+  const [isLoadingQuote, setIsLoadingQuote] = useState(false);
   
   const isReady = ready && authenticated;
   
@@ -82,6 +97,8 @@ export default function Portfolio() {
       queryClient.invalidateQueries({ queryKey: ["/api/portfolio/holdings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trades"] });
       setSellingTicker(null);
+      setSellDialogOpen(false);
+      setSellQuote(null);
     },
     onError: (error: any) => {
       toast({
@@ -93,9 +110,50 @@ export default function Portfolio() {
     },
   });
 
-  const handleSell = async (ticker: string, balance: string) => {
-    setSellingTicker(ticker);
-    sellMutation.mutate({ ticker, amount: balance });
+  // Open sell confirmation dialog and fetch quote
+  const handleSellClick = async (ticker: string, balance: string) => {
+    setSellDialogOpen(true);
+    setIsLoadingQuote(true);
+    setSellQuote(null);
+    
+    try {
+      const res = await apiRequest("POST", "/api/trade/sell-quote", { ticker });
+      const data = await res.json();
+      
+      if (data.error) {
+        toast({
+          title: "Failed to get quote",
+          description: data.error,
+          variant: "destructive",
+        });
+        setSellDialogOpen(false);
+        return;
+      }
+      
+      setSellQuote({
+        ticker: data.ticker,
+        symbol: data.symbol,
+        inputAmount: data.inputAmount,
+        outputAmount: data.outputAmount,
+        priceImpactPct: data.priceImpactPct,
+      });
+    } catch (error: any) {
+      toast({
+        title: "Failed to get quote",
+        description: error.message || "Unknown error",
+        variant: "destructive",
+      });
+      setSellDialogOpen(false);
+    } finally {
+      setIsLoadingQuote(false);
+    }
+  };
+
+  // Confirm and execute sell
+  const handleConfirmSell = async () => {
+    if (!sellQuote) return;
+    setSellingTicker(sellQuote.ticker);
+    sellMutation.mutate({ ticker: sellQuote.ticker, amount: sellQuote.inputAmount });
   };
 
   const transferMutation = useMutation({
@@ -226,6 +284,88 @@ export default function Portfolio() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {/* Sell Confirmation Dialog */}
+        <Dialog open={sellDialogOpen} onOpenChange={(open) => {
+          if (!open) {
+            setSellDialogOpen(false);
+            setSellQuote(null);
+          }
+        }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Confirm Sell</DialogTitle>
+              <DialogDescription>
+                Review your swap details before confirming
+              </DialogDescription>
+            </DialogHeader>
+            
+            {isLoadingQuote ? (
+              <div className="py-8 flex flex-col items-center justify-center gap-4">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-muted-foreground">Getting best price...</p>
+              </div>
+            ) : sellQuote ? (
+              <div className="space-y-6 py-4">
+                {/* Swap Preview */}
+                <div className="flex items-center justify-between gap-4 p-4 rounded-lg bg-muted/50">
+                  <div className="text-center flex-1">
+                    <p className="text-sm text-muted-foreground mb-1">You sell</p>
+                    <p className="text-2xl font-bold">{sellQuote.inputAmount}</p>
+                    <p className="text-sm font-medium text-primary">{sellQuote.symbol}</p>
+                  </div>
+                  <ArrowRight className="w-6 h-6 text-muted-foreground flex-shrink-0" />
+                  <div className="text-center flex-1">
+                    <p className="text-sm text-muted-foreground mb-1">You receive</p>
+                    <p className="text-2xl font-bold text-green-500">${sellQuote.outputAmount}</p>
+                    <p className="text-sm font-medium">USDC</p>
+                  </div>
+                </div>
+
+                {/* Price Impact Warning */}
+                {parseFloat(sellQuote.priceImpactPct) > 1 && (
+                  <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
+                    <AlertCircle className="w-5 h-5 text-yellow-500 flex-shrink-0" />
+                    <p className="text-sm text-yellow-500">
+                      Price impact: {parseFloat(sellQuote.priceImpactPct).toFixed(2)}%
+                    </p>
+                  </div>
+                )}
+
+                <div className="text-xs text-muted-foreground text-center">
+                  Quote is valid for a limited time. Final amount may vary slightly.
+                </div>
+              </div>
+            ) : null}
+
+            <DialogFooter className="gap-2">
+              <Button 
+                variant="outline" 
+                onClick={() => {
+                  setSellDialogOpen(false);
+                  setSellQuote(null);
+                }}
+                disabled={sellMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button 
+                onClick={handleConfirmSell}
+                disabled={!sellQuote || sellMutation.isPending || isLoadingQuote}
+                data-testid="button-confirm-sell"
+              >
+                {sellMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Selling...
+                  </>
+                ) : (
+                  "Confirm Sell"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="grid gap-6 md:grid-cols-4">
           <Card>
@@ -366,17 +506,9 @@ export default function Portfolio() {
                               size="sm" 
                               variant="outline" 
                               data-testid={`button-sell-${holding.symbol}`}
-                              onClick={() => handleSell(holding.underlyingTicker, holding.balance)}
-                              disabled={sellingTicker === holding.underlyingTicker}
+                              onClick={() => handleSellClick(holding.underlyingTicker, holding.balance)}
                             >
-                              {sellingTicker === holding.underlyingTicker ? (
-                                <>
-                                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                                  Selling...
-                                </>
-                              ) : (
-                                "Sell"
-                              )}
+                              Sell
                             </Button>
                           </TableCell>
                         </TableRow>
