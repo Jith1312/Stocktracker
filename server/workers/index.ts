@@ -22,6 +22,63 @@ const APP_URL = getAppDomain().includes("localhost")
   ? `http://${getAppDomain()}`
   : `https://${getAppDomain()}`;
 
+// Poll tweets for a single influencer - used for instant polling when user adds an influencer
+export async function pollInfluencerTweets(influencerId: number): Promise<number> {
+  try {
+    const influencer = await storage.getInfluencer(influencerId);
+    if (!influencer) {
+      console.log(`[Worker] Influencer ${influencerId} not found for instant poll`);
+      return 0;
+    }
+
+    console.log(`[Worker] Instant poll for @${influencer.handle}...`);
+    
+    const tweets = await tweetProvider.fetchTweets(
+      influencer.handle,
+      influencer.lastTweetId || undefined,
+      influencer.platformUserId || undefined
+    );
+
+    if (tweets.length === 0) {
+      console.log(`[Worker] No new tweets for @${influencer.handle}`);
+      return 0;
+    }
+
+    let latestTweetId = influencer.lastTweetId;
+    let savedCount = 0;
+
+    for (const tweetData of tweets) {
+      const existing = await storage.getTweetByTweetId(tweetData.tweetId);
+      if (existing) continue;
+
+      await storage.createTweet({
+        influencerId: influencer.id,
+        tweetId: tweetData.tweetId,
+        text: tweetData.text,
+        url: tweetData.url,
+        rawJson: tweetData.rawJson,
+        tweetCreatedAt: tweetData.createdAt,
+      });
+      savedCount++;
+
+      if (!latestTweetId || tweetData.tweetId > latestTweetId) {
+        latestTweetId = tweetData.tweetId;
+      }
+    }
+
+    await storage.updateInfluencer(influencer.id, {
+      lastTweetId: latestTweetId,
+      lastPolledAt: new Date(),
+    });
+
+    console.log(`[Worker] Instant poll: saved ${savedCount} tweets from @${influencer.handle}`);
+    return savedCount;
+  } catch (error) {
+    console.error(`[Worker] Instant poll error for influencer ${influencerId}:`, error);
+    return 0;
+  }
+}
+
 async function pollTweetsWorker() {
   console.log("[Worker] Starting tweet poll...");
   

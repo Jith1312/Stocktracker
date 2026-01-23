@@ -11,6 +11,7 @@ import { classifyTweet, shouldCreateAlert } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
 import * as privyService from "./services/privy";
+import { pollInfluencerTweets } from "./workers";
 
 const privy = new PrivyClient(
   process.env.PRIVY_APP_ID!,
@@ -344,6 +345,11 @@ export async function registerRoutes(
         influencerId: influencer.id,
         enabled: true,
       });
+
+      // Trigger instant tweet poll for this influencer (don't await - run in background)
+      pollInfluencerTweets(influencer.id).catch(err => 
+        console.error(`[API] Background poll error for influencer ${influencer.id}:`, err)
+      );
 
       res.status(201).json({ subscription, influencer });
     } catch (error) {
