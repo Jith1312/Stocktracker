@@ -119,9 +119,9 @@ export async function executeUltraOrder(
       return data;
     }
     
-    // Retryable error codes: -2005 (Internal error)
-    if (data.code === -2005 && attempt < maxRetries) {
-      console.log(`[Jupiter] Retryable error, waiting ${attempt * 1000}ms before retry...`);
+    // Retryable error codes: -2005 (Internal error), -2000 (Transaction failed to land)
+    if ((data.code === -2005 || data.code === -2000) && attempt < maxRetries) {
+      console.log(`[Jupiter] Retryable error (${data.code}), waiting ${attempt * 1000}ms before retry...`);
       await new Promise(resolve => setTimeout(resolve, attempt * 1000));
       lastError = data;
       continue;

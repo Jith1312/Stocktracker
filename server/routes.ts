@@ -824,28 +824,67 @@ export async function registerRoutes(
               status: "PENDING",
             });
             
-            if (canAutoExecute && quote.transaction && user.privyWalletId && quote.requestId) {
-              // Ultra API flow: Sign transaction, then submit to Jupiter /execute
-              const signResult = await privyService.signSolanaTransaction(
-                user.privyWalletId,
-                quote.transaction
-              );
+            if (canAutoExecute && user.privyWalletId) {
+              // Ultra API flow with retry: Get quote, sign, execute - retry with fresh quote on failure
+              const maxTradeAttempts = 3;
+              let lastError: string = "Unknown error";
+              let signature: string | null = null;
               
-              if ("error" in signResult) {
-                throw new Error(signResult.error);
+              for (let attempt = 1; attempt <= maxTradeAttempts; attempt++) {
+                console.log(`[Trade] Attempt ${attempt}/${maxTradeAttempts}`);
+                
+                try {
+                  // Get fresh quote for each attempt
+                  const freshQuote = attempt === 1 ? quote : await jupiter.getQuote(
+                    inputMint, outputMint, amountRaw, user.solanaPubkey!
+                  );
+                  
+                  if (!freshQuote.transaction || !freshQuote.requestId) {
+                    throw new Error("No transaction in quote");
+                  }
+                  
+                  // Sign transaction
+                  const signResult = await privyService.signSolanaTransaction(
+                    user.privyWalletId!,
+                    freshQuote.transaction
+                  );
+                  
+                  if ("error" in signResult) {
+                    throw new Error(signResult.error);
+                  }
+                  
+                  // Execute (this has its own internal retry for -2005 errors)
+                  const executeResult = await jupiter.executeUltraOrder(
+                    freshQuote.requestId,
+                    signResult.signedTransaction,
+                    1 // Only 1 internal retry, we handle outer retry with fresh quote
+                  );
+                  
+                  console.log("[Trade] Jupiter execute result:", executeResult);
+                  
+                  if (executeResult.status === "Success" || executeResult.signature) {
+                    signature = executeResult.signature || "";
+                    break; // Success!
+                  }
+                  
+                  lastError = executeResult.error || "Trade execution failed";
+                  console.log(`[Trade] Attempt ${attempt} failed: ${lastError}`);
+                  
+                  if (attempt < maxTradeAttempts) {
+                    console.log(`[Trade] Retrying with fresh quote in ${attempt}s...`);
+                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+                  }
+                } catch (err: any) {
+                  lastError = err.message || "Unknown error";
+                  console.log(`[Trade] Attempt ${attempt} threw error: ${lastError}`);
+                  
+                  if (attempt < maxTradeAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+                  }
+                }
               }
               
-              // Submit to Jupiter Ultra /execute endpoint
-              const executeResult = await jupiter.executeUltraOrder(
-                quote.requestId,
-                signResult.signedTransaction
-              );
-              
-              console.log("[Trade] Jupiter execute result:", executeResult);
-              
-              if (executeResult.status === "Success" || executeResult.signature) {
-                const signature = executeResult.signature || "";
-                
+              if (signature) {
                 const trade = await storage.createTrade({
                   userId: user.id,
                   userAlertId: parseInt(userAlertId),
@@ -867,7 +906,7 @@ export async function registerRoutes(
                   `${callback_query.message.text}\n\n✅ Trade executed!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${explorerUrl}">View on Solscan</a>`,
                 );
               } else {
-                throw new Error(executeResult.error || "Trade execution failed");
+                throw new Error(lastError);
               }
             } else {
               const appUrl = process.env.REPLIT_DEV_DOMAIN 
