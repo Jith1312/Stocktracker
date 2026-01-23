@@ -1,0 +1,172 @@
+You are an expert full-stack engineer building a production-grade MVP in Replit.
+
+Build an end-to-end web app + Telegram bot that lets users:
+1) Sign up / log in
+2) Paste X (Twitter) influencer profile URLs they follow
+3) The system fetches each influencer’s tweets continuously
+4) An AI classifier detects actionable stock calls (ticker + bullish/bearish + “buy/sell” intent + confidence)
+5) The user receives Telegram bot notifications for actionable calls
+6) The Telegram message includes buttons like “Buy $10 / Buy $25 / Custom”
+7) Clicking “Buy” executes an onchain swap on Solana: USDC -> Ondo tokenized stock mint (e.g., TSLAon) via Jupiter Swap API
+8) App stores trade history + shows current holdings (read from chain or cached)
+
+IMPORTANT SCOPE: only Ondo tokenized “on” assets on Solana and only spot buys/sells (no perps, no shorting).
+
+Tech stack constraints:
+- Next.js 14+ (App Router) + TypeScript
+- Postgres + Prisma ORM
+- UI: minimal, dark, clean (shadcn/ui is fine)
+- Telegram Bot via webhook (no long polling in production)
+- Queue/worker: use a simple job runner with node-cron + DB state (no Redis dependency) for MVP
+- Use Jupiter Swap API for quotes+swap transaction building, then sign+send via user wallet
+
+Wallet + funding:
+- Use Privy for authentication and Solana embedded wallets.
+- Funding: show user their wallet address; allow them to deposit USDC; optionally integrate Privy onramp if available in their plan (make it modular).
+- Trade execution must be possible from the Telegram interaction:
+  - Default mode (Manual Sign): Telegram “Buy” button opens a secure web deep-link (to your app) that loads the prepared swap transaction and the user signs with Privy (1 extra tap; reliable).
+  - Optional mode (Auto Execute): if the developer provides a server-side signing mechanism (Privy server wallet or delegated session key) enable “1-tap execute” directly from Telegram. Keep this feature behind an explicit user toggle + confirmation and make it easy to disable. If unavailable, hide it.
+
+X ingestion:
+- Prefer official X API if credentials exist. If not, implement a “TweetProvider” interface with a stub/unofficial adapter (so it can be swapped later). Must not break the rest of the app.
+- Polling frequency: every 60–120 seconds per influencer; backoff on errors; respect rate limits.
+- Store raw tweet JSON + extracted text + created_at.
+
+AI classification:
+- Use OpenAI API (or pluggable LLMClient interface) to classify a tweet.
+- Output must be STRICT JSON with this schema:
+  {
+    "is_actionable": boolean,
+    "tickers": [{"symbol":"TSLA","sentiment":"BULLISH|BEARISH","action":"BUY|SELL|NONE","confidence":0-1}],
+    "overall_confidence": 0-1,
+    "reason": "short"
+  }
+- Only create alerts when is_actionable=true AND overall_confidence >= 0.75 AND at least one ticker has action BUY or SELL.
+
+Ondo asset mapping:
+- Maintain a DB table “AssetRegistry” mapping:
+  - underlying_ticker (e.g., TSLA)
+  - ondo_symbol (e.g., TSLAon)
+  - solana_mint (string)
+  - token_program ("SPL" | "TOKEN_2022")
+  - decimals (int)
+  - is_active (bool)
+- Provide an Admin UI (protected by an ADMIN_EMAIL env var) to add/edit registry entries.
+- Seed the registry with placeholder entries; do NOT assume mint addresses are correct—admin can update.
+
+Trading via Jupiter:
+- Input asset is USDC on Solana (mint configured by env).
+- Build swap via Jupiter API:
+  - GET /swap/v1/quote with inputMint, outputMint, amount (u64), slippageBps, swapMode=ExactIn
+  - POST /swap/v1/swap with userPublicKey and quoteResponse
+- Support “Buy $X” where $X is USDC amount:
+  - Convert dollars to raw amount by decimals (USDC 6) e.g., $10 => 10_000_000
+- In Manual Sign mode:
+  - backend creates a “PreparedOrder” record containing quoteResponse + swapTransaction(base64) + expiry(blockheight/time)
+  - Telegram button deep-links user to /trade/confirm?preparedOrderId=...
+  - Page loads swapTransaction and user signs+sends with Privy, then shows success + tx signature.
+- In Auto Execute mode:
+  - server signs and sends swap transaction; record signature; update message status.
+
+Telegram bot:
+- Set webhook endpoint: POST /api/telegram/webhook
+- Handle:
+  - /start: link chat_id to user (via one-time token flow)
+  - /help
+  - /mute TICKER, /unmute TICKER
+  - /amount 10 (set default amount)
+- Notification format:
+  - Influencer handle
+  - Detected ticker + action + confidence
+  - Tweet excerpt + link
+  - Inline buttons: Buy $10, Buy $25, Custom, Ignore
+- Callback handling:
+  - callback_data includes userAlertId + amountTier
+  - Must be idempotent: prevent duplicate execution on double taps.
+
+Core pages:
+1) Landing (what it does)
+2) Auth (Privy)
+3) Dashboard
+   - Connected wallet + USDC balance (read via Solana RPC)
+   - Influencers list + add influencer URL
+   - Telegram connect status (connect button)
+   - Default buy amount selector
+4) Influencer detail
+   - recent tweets detected + classification
+   - toggle alerts on/off
+   - per-influencer amount override
+5) Alerts feed
+6) Portfolio / Holdings
+   - Token balances for registered mints + estimated USD value (optional; can skip pricing in MVP)
+   - Trades history
+7) Admin: Asset Registry CRUD
+
+Database (Prisma models minimum):
+- User (id, privyId, email, solanaPubkey, createdAt)
+- Influencer (id, platform="X", handle, profileUrl, platformUserId, createdAt)
+- Subscription (id, userId, influencerId, enabled, defaultAmountUsd, createdAt)
+- Tweet (id, influencerId, tweetId, text, url, createdAt, rawJson, ingestedAt)
+- Classification (id, tweetId, isActionable, overallConfidence, resultJson, model, createdAt)
+- AlertEvent (id, tweetId, classificationId, createdAt)
+- UserAlert (id, userId, alertEventId, status="SENT|CLICKED|EXECUTED|IGNORED|FAILED", telegramMessageId, createdAt)
+- PreparedOrder (id, userId, userAlertId, inputMint, outputMint, amountIn, quoteJson, swapTxBase64, expiresAt, status)
+- Trade (id, userId, userAlertId, preparedOrderId, txSig, inputMint, outputMint, amountIn, createdAt, status)
+
+Background jobs (node-cron):
+- Job A: poll influencers, fetch new tweets since lastTweetId/lastTimestamp, store
+- Job B: classify unclassified tweets
+- Job C: create alerts + send Telegram messages for new AlertEvents
+
+Security + reliability:
+- Store all secrets in env vars.
+- Verify Telegram webhook requests (use secret token header if configured).
+- Rate-limit public endpoints.
+- Strict validation for influencer URL input.
+- Idempotency on trade execution.
+- Robust error handling and backoff for X API failures.
+- Logging: structured logs for worker runs, API errors, swap failures.
+- Never store private keys in DB. If Auto Execute is enabled, use a provider-supported secure signing method only; otherwise keep Manual Sign.
+
+Environment variables required:
+DATABASE_URL=
+NEXT_PUBLIC_PRIVY_APP_ID=
+PRIVY_APP_SECRET= (server)
+SOLANA_RPC_URL=
+USDC_MINT=
+JUPITER_API_KEY= (if required)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET= (optional)
+X_API_BEARER_TOKEN= (optional; if official)
+OPENAI_API_KEY=
+ADMIN_EMAIL=
+
+Implementation details:
+- Use Next.js API routes under /app/api/...
+- Use Prisma for DB
+- Use a “services/” layer: tweetProvider, classifierClient, telegramClient, jupiterClient, solanaClient
+- Use Zod for runtime validation of all external payloads (Telegram webhook, LLM JSON, quote responses)
+- For Solana tx handling in Manual Sign:
+  - backend stores swapTransaction base64 from Jupiter
+  - frontend deserializes to VersionedTransaction and asks Privy wallet to signAndSendTransaction
+- For balances/holdings:
+  - read token accounts via Solana RPC for the user pubkey and only for mints in AssetRegistry (active)
+  - show amounts and mint symbols
+
+Acceptance criteria:
+- A user can login with Privy, add an influencer profile URL, connect Telegram, and receive an alert when a tweet contains a high-confidence BUY call for a registry-supported ticker.
+- Clicking “Buy $10” leads to a successful onchain swap USDC->(Ticker)on (either via Manual Sign confirmation page or Auto Execute if enabled) and the Trade is stored + shown in history.
+- Workers run continuously and do not reprocess the same tweet twice.
+- Admin can add/update AssetRegistry entries.
+
+Deliverables in the repo:
+- Working app with instructions in README:
+  - how to set env vars
+  - how to set Telegram webhook URL
+  - how to run locally in Replit
+  - how to deploy on Replit
+- Prisma schema + migration
+- Minimal UI polished
+- Seed script for a couple of assets (placeholders) and one influencer for testing
+
+Now implement it fully. Start by scaffolding the project structure, then Prisma schema, then Privy auth + dashboard, then Telegram connect, then ingestion+classification workers, then alert sending, then Jupiter swap preparation + confirm page, then holdings/trades pages, then admin registry. Keep code clean and commented where needed.
