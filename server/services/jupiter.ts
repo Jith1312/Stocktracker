@@ -1,9 +1,36 @@
 import { Connection, VersionedTransaction, PublicKey } from "@solana/web3.js";
 
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
-const JUPITER_API_URL = JUPITER_API_KEY 
-  ? "https://api.jup.ag" 
-  : "https://lite-api.jup.ag";
+const JUPITER_API_URL = "https://api.jup.ag";
+
+export interface UltraOrderResponse {
+  inputMint: string;
+  outputMint: string;
+  inAmount: string;
+  outAmount: string;
+  otherAmountThreshold: string;
+  swapMode: string;
+  slippageBps: number;
+  priceImpactPct: string;
+  routePlan: any[];
+  transaction: string | null;
+  requestId: string;
+  swapType: string;
+  gasless: boolean;
+  inUsdValue: number;
+  outUsdValue: number;
+}
+
+export interface UltraExecuteResponse {
+  status: string;
+  signature?: string;
+  error?: string;
+  code?: string;
+  inputMint?: string;
+  outputMint?: string;
+  inputAmount?: string;
+  outputAmount?: string;
+}
 
 export interface QuoteResponse {
   inputMint: string;
@@ -15,8 +42,9 @@ export interface QuoteResponse {
   slippageBps: number;
   priceImpactPct: string;
   routePlan: any[];
-  contextSlot: number;
-  timeTaken: number;
+  requestId: string;
+  transaction: string | null;
+  gasless: boolean;
 }
 
 export interface SwapResponse {
@@ -25,18 +53,19 @@ export interface SwapResponse {
   prioritizationFeeLamports: number;
 }
 
-export async function getQuote(
+export async function getUltraOrder(
   inputMint: string,
   outputMint: string,
   amountRaw: string,
-  slippageBps = 50
-): Promise<QuoteResponse> {
-  const url = new URL(`${JUPITER_API_URL}/swap/v1/quote`);
+  takerAddress?: string
+): Promise<UltraOrderResponse> {
+  const url = new URL(`${JUPITER_API_URL}/ultra/v1/order`);
   url.searchParams.set("inputMint", inputMint);
   url.searchParams.set("outputMint", outputMint);
   url.searchParams.set("amount", amountRaw);
-  url.searchParams.set("slippageBps", slippageBps.toString());
-  url.searchParams.set("swapMode", "ExactIn");
+  if (takerAddress) {
+    url.searchParams.set("taker", takerAddress);
+  }
 
   const headers: Record<string, string> = {};
   if (JUPITER_API_KEY) {
@@ -44,18 +73,19 @@ export async function getQuote(
   }
 
   const response = await fetch(url.toString(), { headers });
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Jupiter quote error: ${error}`);
+  const data = await response.json();
+  
+  if (data.error) {
+    throw new Error(`Jupiter Ultra order error: ${data.error}`);
   }
 
-  return response.json();
+  return data;
 }
 
-export async function getSwapTransaction(
-  quoteResponse: QuoteResponse,
-  userPublicKey: string
-): Promise<SwapResponse> {
+export async function executeUltraOrder(
+  requestId: string,
+  signedTransaction: string
+): Promise<UltraExecuteResponse> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -63,24 +93,63 @@ export async function getSwapTransaction(
     headers["x-api-key"] = JUPITER_API_KEY;
   }
 
-  const response = await fetch(`${JUPITER_API_URL}/swap/v1/swap`, {
+  const response = await fetch(`${JUPITER_API_URL}/ultra/v1/execute`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      quoteResponse,
-      userPublicKey,
-      wrapAndUnwrapSol: true,
-      dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: "auto",
+      requestId,
+      signedTransaction,
     }),
   });
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Jupiter swap error: ${error}`);
+  const data = await response.json();
+  return data;
+}
+
+export async function getQuote(
+  inputMint: string,
+  outputMint: string,
+  amountRaw: string,
+  takerAddress?: string
+): Promise<QuoteResponse> {
+  const ultraOrder = await getUltraOrder(inputMint, outputMint, amountRaw, takerAddress);
+  
+  return {
+    inputMint: ultraOrder.inputMint,
+    outputMint: ultraOrder.outputMint,
+    inAmount: ultraOrder.inAmount,
+    outAmount: ultraOrder.outAmount,
+    otherAmountThreshold: ultraOrder.otherAmountThreshold,
+    swapMode: ultraOrder.swapMode,
+    slippageBps: ultraOrder.slippageBps,
+    priceImpactPct: ultraOrder.priceImpactPct,
+    routePlan: ultraOrder.routePlan,
+    requestId: ultraOrder.requestId,
+    transaction: ultraOrder.transaction,
+    gasless: ultraOrder.gasless,
+  };
+}
+
+export async function getSwapTransaction(
+  quoteResponse: QuoteResponse,
+  userPublicKey: string
+): Promise<SwapResponse> {
+  const ultraOrder = await getUltraOrder(
+    quoteResponse.inputMint,
+    quoteResponse.outputMint,
+    quoteResponse.inAmount,
+    userPublicKey
+  );
+
+  if (!ultraOrder.transaction) {
+    throw new Error("No transaction available from Jupiter Ultra");
   }
 
-  return response.json();
+  return {
+    swapTransaction: ultraOrder.transaction,
+    lastValidBlockHeight: 0,
+    prioritizationFeeLamports: 0,
+  };
 }
 
 export function usdToRawAmount(usdAmount: number, decimals: number = 6): string {
