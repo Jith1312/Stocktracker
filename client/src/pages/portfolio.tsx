@@ -270,14 +270,34 @@ export default function Portfolio() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="amount">Amount</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    placeholder="Enter amount"
-                    value={transferAmount}
-                    onChange={(e) => setTransferAmount(e.target.value)}
-                    data-testid="input-transfer-amount"
-                  />
+                  <div className="flex gap-2">
+                    <Input
+                      id="amount"
+                      type="number"
+                      placeholder="Enter amount"
+                      value={transferAmount}
+                      onChange={(e) => setTransferAmount(e.target.value)}
+                      data-testid="input-transfer-amount"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const selectedToken = transferableTokens.find(t => t.mint === transferToken);
+                        if (selectedToken) {
+                          const maxAmount = selectedToken.symbol === 'USDC' 
+                            ? selectedToken.balance.toFixed(2)
+                            : selectedToken.balance.toFixed(6);
+                          setTransferAmount(maxAmount);
+                        }
+                      }}
+                      data-testid="button-max-amount"
+                    >
+                      Max
+                    </Button>
+                  </div>
                 </div>
               </div>
               <DialogFooter>
