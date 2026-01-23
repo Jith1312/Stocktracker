@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
 import { setAuthTokenGetter } from "./queryClient";
 
@@ -35,7 +35,7 @@ function PrivyNotConfigured() {
           To enable login functionality, please configure your Privy App ID.
         </p>
         <div className="bg-muted/50 p-4 rounded-lg text-left">
-          <p className="text-sm text-muted-foreground mb-2">Add to your .env file:</p>
+          <p className="text-sm text-muted-foreground mb-2">Add to your environment:</p>
           <code className="text-xs text-primary font-mono">VITE_PRIVY_APP_ID=your-app-id</code>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -49,27 +49,6 @@ function PrivyNotConfigured() {
 export function PrivyProviderWrapper({ children }: { children: React.ReactNode }) {
   const appId = import.meta.env.VITE_PRIVY_APP_ID;
   
-  const privyConfig = useMemo(() => ({
-    appearance: {
-      theme: 'dark' as const,
-      accentColor: '#22c55e',
-    },
-    loginMethods: ['email', 'wallet', 'google', 'twitter'] as const,
-    embeddedWallets: {
-      createOnLogin: 'users-without-wallets' as const,
-    },
-    supportedChains: [
-      {
-        id: 'solana:mainnet',
-        name: 'Solana',
-        nativeCurrency: { name: 'SOL', symbol: 'SOL', decimals: 9 },
-        rpcUrls: {
-          default: { http: ['https://api.mainnet-beta.solana.com'] },
-        },
-      },
-    ],
-  }), []);
-  
   if (!appId || appId.startsWith('$')) {
     return <PrivyNotConfigured />;
   }
@@ -77,7 +56,16 @@ export function PrivyProviderWrapper({ children }: { children: React.ReactNode }
   return (
     <PrivyProvider
       appId={appId}
-      config={privyConfig}
+      config={{
+        appearance: {
+          theme: 'dark',
+          accentColor: '#22c55e',
+        },
+        loginMethods: ['email', 'wallet', 'google', 'twitter'],
+        embeddedWallets: {
+          createOnLogin: 'users-without-wallets',
+        },
+      }}
     >
       <AuthTokenSync>
         {children}
