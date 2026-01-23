@@ -817,19 +817,29 @@ export async function registerRoutes(
               status: "PENDING",
             });
             
-            if (canAutoExecute && quote.transaction && user.privyWalletId) {
-              const txResult = await privyService.signAndSendSolanaTransaction(
+            if (canAutoExecute && quote.transaction && user.privyWalletId && quote.requestId) {
+              // Step 1: Sign the transaction with Privy
+              const signResult = await privyService.signSolanaTransaction(
                 user.privyWalletId,
-                quote.transaction,
-                user.privyId
+                quote.transaction
               );
               
-              if ("signature" in txResult) {
+              if ("error" in signResult) {
+                throw new Error(signResult.error);
+              }
+              
+              // Step 2: Execute via Jupiter Ultra API (they broadcast the transaction)
+              const executeResult = await jupiter.executeUltraOrder(
+                quote.requestId,
+                signResult.signedTransaction
+              );
+              
+              if (executeResult.status === "Success" && executeResult.signature) {
                 const trade = await storage.createTrade({
                   userId: user.id,
                   userAlertId: parseInt(userAlertId),
                   preparedOrderId: preparedOrder.id,
-                  txSig: txResult.signature,
+                  txSig: executeResult.signature,
                   inputMint,
                   outputMint,
                   amountIn: amountRaw,
@@ -839,14 +849,14 @@ export async function registerRoutes(
                 await storage.updatePreparedOrder(preparedOrder.id, { status: "EXECUTED" });
                 await storage.updateUserAlert(parseInt(userAlertId), { status: "EXECUTED" });
                 
-                const explorerUrl = `https://solscan.io/tx/${txResult.signature}`;
+                const explorerUrl = `https://solscan.io/tx/${executeResult.signature}`;
                 await telegram.editMessageText(
                   chatId,
                   messageId,
                   `${callback_query.message.text}\n\n✅ Trade executed!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${explorerUrl}">View on Solscan</a>`,
                 );
               } else {
-                throw new Error(txResult.error);
+                throw new Error(executeResult.error || "Jupiter execution failed");
               }
             } else {
               const appUrl = process.env.REPLIT_DEV_DOMAIN 
