@@ -16,9 +16,14 @@ const privy = new PrivyClient(
   process.env.PRIVY_APP_SECRET!
 );
 
-const connection = new Connection(
-  process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com"
-);
+// Use Helius RPC if available for better rate limits
+const getRpcUrl = () => {
+  if (process.env.HELIUS_API_KEY) {
+    return `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+  }
+  return process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+};
+const connection = new Connection(getRpcUrl());
 
 const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
