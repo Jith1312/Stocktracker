@@ -682,17 +682,16 @@ export async function registerRoutes(
               console.error("[Telegram] Error fetching USDC balance:", e);
             }
 
-            // Fetch all token holdings in a single RPC call
+            // Fetch all token holdings - check both Token and Token-2022 programs
             const assets = await storage.getAssetRegistry();
             const assetsByMint = new Map(assets.map(a => [a.solanaMint, a]));
             const holdings: { ticker: string; balance: string }[] = [];
             
-            try {
-              const allTokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
-                programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-              });
-              
-              for (const { account } of allTokenAccounts.value) {
+            const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+            const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+            
+            const processAccounts = (accounts: any[]) => {
+              for (const { account } of accounts) {
                 const info = account.data.parsed.info;
                 const mint = info.mint;
                 const asset = assetsByMint.get(mint);
@@ -704,8 +703,22 @@ export async function registerRoutes(
                   });
                 }
               }
+            };
+            
+            try {
+              // Check regular Token program
+              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM });
+              processAccounts(tokenAccounts.value);
             } catch (e) {
-              console.error("[Telegram] Error fetching token accounts:", e);
+              console.error("[Telegram] Error fetching Token accounts:", e);
+            }
+            
+            try {
+              // Check Token-2022 program (Ondo tokens may use this)
+              const token2022Accounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_2022_PROGRAM });
+              processAccounts(token2022Accounts.value);
+            } catch (e) {
+              console.error("[Telegram] Error fetching Token-2022 accounts:", e);
             }
 
             const trades = await storage.getTradesByUser(user.id);
