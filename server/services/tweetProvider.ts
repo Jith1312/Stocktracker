@@ -27,23 +27,45 @@ export class StubTweetProvider implements TweetProvider {
   }
 }
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export class TwitterApiIoProvider implements TweetProvider {
   private apiKey: string;
   private baseUrl = "https://api.twitterapi.io";
+  private lastRequestTime = 0;
+  private minRequestInterval = 6000;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
   }
 
+  private async waitForRateLimit() {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    if (timeSinceLastRequest < this.minRequestInterval) {
+      await delay(this.minRequestInterval - timeSinceLastRequest);
+    }
+    this.lastRequestTime = Date.now();
+  }
+
   async fetchTweets(handle: string, sinceId?: string): Promise<TweetData[]> {
     try {
-      const url = `${this.baseUrl}/twitter/user/last_tweets?userName=${encodeURIComponent(handle)}`;
+      await this.waitForRateLimit();
+      
+      const url = `${this.baseUrl}/twitter/user/last_tweets?userName=${encodeURIComponent(handle)}&includeReplies=false`;
+      
+      console.log(`[TwitterApiIo] Fetching tweets for @${handle}...`);
       
       const response = await fetch(url, {
         headers: {
           "X-API-Key": this.apiKey,
         },
       });
+
+      if (response.status === 429) {
+        console.log(`[TwitterApiIo] Rate limited, will retry on next poll cycle`);
+        return [];
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -53,13 +75,16 @@ export class TwitterApiIoProvider implements TweetProvider {
 
       const data = await response.json();
       
-      if (data.status !== "success" || !data.tweets) {
-        console.log(`[TwitterApiIo] No tweets found for @${handle}: ${data.message || "empty"}`);
+      console.log(`[TwitterApiIo] Response status: ${data.status}, tweet count: ${data.tweets?.length || 0}`);
+      
+      if (data.status !== "success" || !data.tweets || data.tweets.length === 0) {
+        console.log(`[TwitterApiIo] No tweets found for @${handle}: ${data.message || "empty response"}`);
         return [];
       }
 
       const tweets = data.tweets
         .filter((tweet: any) => {
+          if (!tweet.id || !tweet.text) return false;
           if (!sinceId) return true;
           return tweet.id > sinceId;
         })
@@ -71,7 +96,7 @@ export class TwitterApiIoProvider implements TweetProvider {
           rawJson: tweet,
         }));
 
-      console.log(`[TwitterApiIo] Fetched ${tweets.length} tweets for @${handle}`);
+      console.log(`[TwitterApiIo] Fetched ${tweets.length} new tweets for @${handle}`);
       return tweets;
     } catch (error) {
       console.error(`[TwitterApiIo] Error fetching tweets:`, error);
@@ -81,6 +106,8 @@ export class TwitterApiIoProvider implements TweetProvider {
 
   async getUserInfo(handle: string): Promise<{ userId?: string; displayName?: string; avatarUrl?: string } | null> {
     try {
+      await this.waitForRateLimit();
+      
       const url = `${this.baseUrl}/twitter/user/info?userName=${encodeURIComponent(handle)}`;
       
       const response = await fetch(url, {
@@ -88,6 +115,11 @@ export class TwitterApiIoProvider implements TweetProvider {
           "X-API-Key": this.apiKey,
         },
       });
+
+      if (response.status === 429) {
+        console.log(`[TwitterApiIo] Rate limited on user info`);
+        return null;
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -114,14 +146,20 @@ export class TwitterApiIoProvider implements TweetProvider {
   }
 }
 
+let providerInstance: TweetProvider | null = null;
+
 export function createTweetProvider(): TweetProvider {
+  if (providerInstance) return providerInstance;
+  
   const apiKey = process.env.X_API_BEARER_TOKEN;
   if (apiKey) {
     console.log("[TweetProvider] Using TwitterAPI.io");
-    return new TwitterApiIoProvider(apiKey);
+    providerInstance = new TwitterApiIoProvider(apiKey);
+  } else {
+    console.log("[TweetProvider] Using stub provider (no API key)");
+    providerInstance = new StubTweetProvider();
   }
-  console.log("[TweetProvider] Using stub provider (no API key)");
-  return new StubTweetProvider();
+  return providerInstance;
 }
 
 export const tweetProvider = createTweetProvider();
