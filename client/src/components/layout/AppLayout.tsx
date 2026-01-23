@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { usePrivy } from "@privy-io/react-auth";
+import { useQuery } from "@tanstack/react-query";
 import { 
   LayoutDashboard, 
   Users, 
@@ -39,6 +40,13 @@ function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = usePrivy();
 
+  const { data: alerts } = useQuery<{ id: number; status: string }[]>({
+    queryKey: ["/api/alerts"],
+    refetchInterval: 30000,
+  });
+  
+  const unreadCount = alerts?.filter(a => a.status === "SENT").length || 0;
+
   const userEmail = user?.email?.address || user?.wallet?.address?.slice(0, 8) + "...";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
 
@@ -71,8 +79,8 @@ function AppSidebar() {
                       <Link href={item.path}>
                         <item.icon className="w-5 h-5" />
                         <span>{item.label}</span>
-                        {item.label === "Alerts" && (
-                          <Badge variant="default" className="ml-auto text-xs">3</Badge>
+                        {item.label === "Alerts" && unreadCount > 0 && (
+                          <Badge variant="default" className="ml-auto text-xs">{unreadCount}</Badge>
                         )}
                       </Link>
                     </SidebarMenuButton>
