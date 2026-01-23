@@ -37,6 +37,15 @@ export default function Dashboard() {
     enabled: authenticated,
   });
 
+  const { data: portfolioData, isLoading: portfolioLoading } = useQuery<{
+    holdings: any[];
+    usdcBalance: number;
+    totalValue: number;
+  }>({
+    queryKey: ["/api/portfolio/holdings"],
+    enabled: authenticated,
+  });
+
   const { data: recentAlerts, isLoading: alertsLoading } = useQuery({
     queryKey: ["/api/alerts", "recent"],
   });
@@ -91,21 +100,40 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-6 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Wallet Balance</CardTitle>
-              <Wallet className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Total Value</CardTitle>
+              <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              {statsLoading ? (
+              {portfolioLoading ? (
                 <Skeleton className="h-8 w-24" />
               ) : (
                 <>
-                  <div className="text-2xl font-bold" data-testid="text-balance">
-                    ${stats?.usdcBalance || "0.00"}
+                  <div className="text-2xl font-bold text-primary" data-testid="text-total-value">
+                    ${portfolioData?.totalValue?.toFixed(2) || "0.00"}
                   </div>
-                  <p className="text-xs text-muted-foreground">USDC on Solana</p>
+                  <p className="text-xs text-muted-foreground">Portfolio + USDC</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">USDC Balance</CardTitle>
+              <Wallet className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {portfolioLoading ? (
+                <Skeleton className="h-8 w-24" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold" data-testid="text-usdc-balance">
+                    ${portfolioData?.usdcBalance?.toFixed(2) || "0.00"}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Available to trade</p>
                 </>
               )}
             </CardContent>
