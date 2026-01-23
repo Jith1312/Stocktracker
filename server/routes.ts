@@ -682,15 +682,39 @@ export async function registerRoutes(
               console.error("[Telegram] Error fetching USDC balance:", e);
             }
 
+            // Fetch Ondo token holdings
+            const assets = await storage.getAssetRegistry();
+            const activeAssets = assets.filter(a => a.isActive && a.underlyingTicker !== "USDC");
+            const holdings: { ticker: string; balance: string }[] = [];
+            
+            for (const asset of activeAssets) {
+              try {
+                const result = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+                const displayBalance = jupiter.rawAmountToDisplay(result.balance, asset.decimals);
+                if (parseFloat(displayBalance) > 0) {
+                  holdings.push({ ticker: asset.underlyingTicker, balance: displayBalance });
+                }
+              } catch (e) {
+                // Skip tokens with errors
+              }
+            }
+
             const trades = await storage.getTradesByUser(user.id);
             const recentTrades = trades.slice(0, 5);
 
             let portfolioText = `💰 <b>Your Wallet Balance</b>
 
 🟣 SOL: ${solAmount}
-💵 USDC: $${usdcBalance}
+💵 USDC: $${usdcBalance}`;
 
-📍 Wallet: <code>${user.solanaPubkey.slice(0, 8)}...${user.solanaPubkey.slice(-6)}</code>`;
+            if (holdings.length > 0) {
+              portfolioText += `\n\n📊 <b>Stock Tokens</b>`;
+              for (const h of holdings) {
+                portfolioText += `\n• ${h.ticker}: ${h.balance}`;
+              }
+            }
+
+            portfolioText += `\n\n📍 Wallet: <code>${user.solanaPubkey.slice(0, 8)}...${user.solanaPubkey.slice(-6)}</code>`;
 
             if (message?.text === "/portfolio") {
               if (recentTrades.length > 0) {
