@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { usePrivy, useDelegatedActions, useWallets } from "@privy-io/react-auth";
+import { usePrivy, useSessionSigners, useWallets } from "@privy-io/react-auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -45,7 +45,7 @@ interface SignerStatus {
 export default function Settings() {
   const { user, authenticated } = usePrivy();
   const { wallets } = useWallets();
-  const { delegateWallet } = useDelegatedActions();
+  const { addSessionSigners } = useSessionSigners();
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
@@ -67,12 +67,16 @@ export default function Settings() {
   const embeddedWallet = embeddedWalletFromHook || embeddedWalletFromUser;
   const embeddedWalletAddress = embeddedWalletFromHook?.address || (embeddedWalletFromUser as any)?.address;
   
-  // Check if wallet is already delegated
-  const isWalletDelegated = user?.linkedAccounts?.some(
-    (account: any) => account.type === "wallet" && 
-                       account.walletClientType === "privy" && 
-                       account.chainType === "solana" &&
-                       account.delegated === true
+  // Check if wallet already has our session signer added
+  const hasSessionSigner = user?.linkedAccounts?.some(
+    (account: any) => {
+      if (account.type === "wallet" && account.walletClientType === "privy" && account.chainType === "solana") {
+        // Check if this wallet has session signers that include our signer
+        const signers = (account as any).sessionSigners || [];
+        return signers.some((s: any) => s.signerId === KEY_QUORUM_ID);
+      }
+      return false;
+    }
   );
 
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
@@ -122,7 +126,7 @@ export default function Settings() {
   });
 
   const handleEnableOneTap = async () => {
-    if (!embeddedWallet) {
+    if (!embeddedWallet || !embeddedWalletAddress) {
       toast({
         title: "No wallet found",
         description: "Please create a wallet first by connecting your account.",
@@ -131,19 +135,34 @@ export default function Settings() {
       return;
     }
 
+    if (!KEY_QUORUM_ID) {
+      toast({
+        title: "Configuration error",
+        description: "Server signing is not configured. Please contact support.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsAddingSigner(true);
     try {
-      // Step 1: Delegate the wallet (client-side) if not already delegated
-      if (!isWalletDelegated && embeddedWalletAddress) {
-        console.log("[Settings] Delegating wallet:", embeddedWalletAddress);
-        await delegateWallet({
+      // Step 1: Add session signer for TEE wallets (replaces delegateWallet for on-device)
+      if (!hasSessionSigner) {
+        console.log("[Settings] Adding session signer for wallet:", embeddedWalletAddress);
+        console.log("[Settings] Using signer ID:", KEY_QUORUM_ID);
+        await addSessionSigners({
           address: embeddedWalletAddress,
-          chainType: "solana",
+          signers: [
+            {
+              signerId: KEY_QUORUM_ID,
+              policyIds: [], // No policy restrictions
+            },
+          ],
         });
-        console.log("[Settings] Wallet delegated successfully");
+        console.log("[Settings] Session signer added successfully");
       }
       
-      // Step 2: Enable server-side signer
+      // Step 2: Enable server-side signer in our database
       await enableSignerMutation.mutateAsync();
 
       toast({
