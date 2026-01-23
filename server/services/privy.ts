@@ -201,7 +201,11 @@ export async function signSolanaTransaction(
     
     // Check if it's already a VersionedTransaction with serialize method
     let signedTxBuffer: Buffer;
-    if (typeof signedTx.serialize === 'function') {
+    const hasSerialize = typeof signedTx.serialize === 'function';
+    console.log("[Privy] signedTx has serialize method:", hasSerialize);
+    
+    if (hasSerialize) {
+      console.log("[Privy] Using signedTx.serialize() directly");
       signedTxBuffer = Buffer.from(signedTx.serialize());
     } else {
       // If it's a plain object, we need to reconstruct the VersionedTransaction
