@@ -451,7 +451,8 @@ export async function registerRoutes(
       const holdings = await Promise.all(activeAssets.map(async (asset) => {
         try {
           const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-          const displayBalance = jupiter.rawAmountToDisplay(balance.balance, asset.decimals);
+          // Use on-chain decimals instead of database (more accurate)
+          const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
           
           if (parseFloat(displayBalance) === 0) return null;
           
@@ -585,6 +586,64 @@ export async function registerRoutes(
     }
   });
 
+  // Sell tokens back to USDC
+  app.post("/api/trade/sell", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { ticker, amount } = req.body;
+      
+      if (!user.solanaPubkey || !user.privyWalletId) {
+        return res.status(400).json({ error: "Wallet not configured for trading" });
+      }
+      
+      const asset = await storage.getAssetByTicker(ticker);
+      if (!asset) {
+        return res.status(404).json({ error: `Asset ${ticker} not found` });
+      }
+      
+      // Get quote: Token → USDC
+      const amountRaw = jupiter.usdToRawAmount(parseFloat(amount), asset.decimals);
+      console.log(`[Sell] Getting quote to sell ${amount} worth of ${ticker}`);
+      
+      const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, amountRaw, user.solanaPubkey);
+      
+      if (!quote.transaction || !quote.requestId) {
+        return res.status(400).json({ error: "Failed to get quote" });
+      }
+      
+      // Sign and execute
+      const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
+      
+      if ("error" in signResult) {
+        return res.status(400).json({ error: signResult.error });
+      }
+      
+      const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
+      
+      if (executeResult.status === "Success" && executeResult.signature) {
+        // Save trade
+        const trade = await storage.createTrade({
+          userId: user.id,
+          userAlertId: null,
+          preparedOrderId: null,
+          txSig: executeResult.signature,
+          inputMint: asset.solanaMint,
+          outputMint: USDC_MINT,
+          amountIn: amountRaw,
+          amountOut: executeResult.outputAmountResult,
+          status: "COMPLETED",
+        });
+        
+        res.json({ success: true, signature: executeResult.signature, trade });
+      } else {
+        res.status(400).json({ error: executeResult.error || "Trade failed" });
+      }
+    } catch (error: any) {
+      console.error("[API] Sell trade error:", error);
+      res.status(500).json({ error: error.message || "Failed to execute sell" });
+    }
+  });
+
   app.get("/api/telegram/link", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
@@ -648,11 +707,124 @@ export async function registerRoutes(
 /help - Show this message
 /balance - Show your wallet balance
 /portfolio - Show your holdings and trade history
+/sell TICKER - Sell all of a token back to USDC (e.g., /sell NVDA)
 /mute TICKER - Mute alerts for a ticker
 /unmute TICKER - Unmute alerts for a ticker
 /amount NUMBER - Set default trade amount (e.g., /amount 50)`,
           parseMode: "HTML",
         });
+      }
+      
+      // Handle /sell command
+      if (message?.text?.startsWith("/sell ")) {
+        const ticker = message.text.split(" ")[1]?.toUpperCase();
+        const chatId = message.chat.id.toString();
+        
+        if (!ticker) {
+          await telegram.sendMessage({
+            chatId,
+            text: "❌ Please specify a ticker. Example: /sell NVDA",
+          });
+          return res.sendStatus(200);
+        }
+        
+        const user = await storage.getUserByTelegramChatId(chatId);
+        if (!user || !user.solanaPubkey || !user.privyWalletId) {
+          await telegram.sendMessage({
+            chatId,
+            text: "❌ Wallet not configured. Please set up one-tap trading in the app first.",
+          });
+          return res.sendStatus(200);
+        }
+        
+        const asset = await storage.getAssetByTicker(ticker);
+        if (!asset) {
+          await telegram.sendMessage({
+            chatId,
+            text: `❌ Unknown ticker: ${ticker}`,
+          });
+          return res.sendStatus(200);
+        }
+        
+        await telegram.sendMessage({
+          chatId,
+          text: `⏳ Getting your ${ticker} balance and preparing sale...`,
+        });
+        
+        try {
+          // Get token balance
+          const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+          const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
+          
+          if (parseFloat(displayBalance) === 0) {
+            await telegram.sendMessage({
+              chatId,
+              text: `❌ You don't have any ${ticker} tokens to sell.`,
+            });
+            return res.sendStatus(200);
+          }
+          
+          await telegram.sendMessage({
+            chatId,
+            text: `📊 Found ${displayBalance} ${ticker}. Selling to USDC...`,
+          });
+          
+          // Get quote and execute
+          const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, balance.balance, user.solanaPubkey);
+          
+          if (!quote.transaction || !quote.requestId) {
+            await telegram.sendMessage({
+              chatId,
+              text: `❌ Failed to get quote. Market may be unavailable.`,
+            });
+            return res.sendStatus(200);
+          }
+          
+          const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
+          
+          if ("error" in signResult) {
+            await telegram.sendMessage({
+              chatId,
+              text: `❌ Signing failed: ${signResult.error}`,
+            });
+            return res.sendStatus(200);
+          }
+          
+          const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
+          
+          if (executeResult.status === "Success" && executeResult.signature) {
+            const outputAmount = jupiter.rawAmountToDisplay(executeResult.outputAmountResult || "0", 6);
+            
+            await storage.createTrade({
+              userId: user.id,
+              userAlertId: null,
+              preparedOrderId: null,
+              txSig: executeResult.signature,
+              inputMint: asset.solanaMint,
+              outputMint: USDC_MINT,
+              amountIn: balance.balance,
+              amountOut: executeResult.outputAmountResult,
+              status: "COMPLETED",
+            });
+            
+            await telegram.sendMessage({
+              chatId,
+              text: `✅ <b>Sold ${displayBalance} ${ticker}!</b>\n\nReceived: $${outputAmount} USDC\n\n<a href="https://explorer.solana.com/tx/${executeResult.signature}">View Transaction</a>`,
+              parseMode: "HTML",
+            });
+          } else {
+            await telegram.sendMessage({
+              chatId,
+              text: `❌ Trade failed: ${executeResult.error || "Unknown error"}`,
+            });
+          }
+        } catch (err: any) {
+          console.error("[Telegram] Sell error:", err);
+          await telegram.sendMessage({
+            chatId,
+            text: `❌ Error: ${err.message || "Unknown error"}`,
+          });
+        }
       }
 
       if (message?.text === "/balance" || message?.text === "/portfolio") {
