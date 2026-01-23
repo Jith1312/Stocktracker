@@ -53,8 +53,7 @@ export default function Dashboard() {
 
   const connectTelegramMutation = useMutation({
     mutationFn: async () => {
-      const response = await apiRequest("GET", "/api/telegram/link");
-      return response.json();
+      return await apiRequest("GET", "/api/telegram/link");
     },
     onSuccess: (data) => {
       if (data.deepLink) {
