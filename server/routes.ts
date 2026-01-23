@@ -1048,6 +1048,13 @@ export async function registerRoutes(
   app.post("/api/telegram/webhook", async (req: Request, res: Response) => {
     try {
       const { message, callback_query } = req.body;
+      
+      console.log("[Telegram Webhook] Received:", JSON.stringify({ 
+        hasMessage: !!message, 
+        hasCallback: !!callback_query,
+        messageText: message?.text?.slice(0, 50),
+        callbackData: callback_query?.data 
+      }));
 
       if (message?.text?.startsWith("/start ")) {
         const token = message.text.split(" ")[1];
