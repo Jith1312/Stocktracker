@@ -113,7 +113,7 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
 }
 
 export async function signAndSendSolanaTransaction(
-  walletAddress: string,
+  walletId: string,
   transactionBase64: string
 ): Promise<{ signature: string } | { error: string }> {
   try {
@@ -123,12 +123,10 @@ export async function signAndSendSolanaTransaction(
     
     const privy = getPrivyNodeClient();
     
-    console.log("[Privy] Signing transaction for wallet:", walletAddress);
+    console.log("[Privy] Signing transaction for wallet ID:", walletId);
     
-    // Use the wallets RPC endpoint with the correct format
-    const response = await (privy as any).wallets().rpc({
-      address: walletAddress,
-      chainType: "solana",
+    // Use the wallets RPC endpoint with correct signature: rpc(walletId, params)
+    const response = await (privy as any).wallets().rpc(walletId, {
       method: "signAndSendTransaction",
       params: {
         transaction: transactionBase64,
@@ -137,7 +135,7 @@ export async function signAndSendSolanaTransaction(
     });
     
     console.log("[Privy] Transaction sent successfully:", response);
-    return { signature: response.data?.hash || response.hash || response.transactionHash };
+    return { signature: response.data?.hash || response.hash || response.signature || response.transactionHash };
   } catch (error: any) {
     console.error("[Privy] Failed to sign and send transaction:", error);
     return { error: error.message || "Failed to execute transaction" };
