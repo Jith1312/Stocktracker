@@ -112,15 +112,11 @@ export function formatAlertMessage(
   tweetExcerpt: string,
   tweetUrl: string
 ): string {
-  const actionEmoji = action === "BUY" ? "🟢" : "🔴";
-  const confidencePercent = Math.round(confidence * 100);
+  return `📢 <b>$${ticker} Mentioned!</b>
 
-  return `${actionEmoji} <b>${action} Signal: $${ticker}</b>
-
-📊 Confidence: ${confidencePercent}%
 👤 From: @${influencerHandle}
 
-"${tweetExcerpt.slice(0, 200)}${tweetExcerpt.length > 200 ? "..." : ""}"
+"${tweetExcerpt.slice(0, 250)}${tweetExcerpt.length > 250 ? "..." : ""}"
 
 <a href="${tweetUrl}">View Tweet</a>`;
 }
@@ -131,18 +127,19 @@ export function createTradeButtons(
   action: "BUY" | "SELL" = "BUY",
   defaultAmount: number = 10
 ): InlineKeyboardButton[][] {
-  const actionEmoji = action === "BUY" ? "💰" : "💸";
-  const actionText = action === "BUY" ? "Buy" : "Sell";
-  
   const amounts = [defaultAmount, defaultAmount * 2.5];
   
   return [
     [
-      { text: `${actionEmoji} ${actionText} $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:${action}` },
-      { text: `${actionEmoji} ${actionText} $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:${action}` },
+      { text: `🟢 Buy $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:BUY` },
+      { text: `🟢 Buy $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:BUY` },
     ],
     [
-      { text: `${actionEmoji} Custom`, url: `${appUrl}/trade/confirm?alertId=${userAlertId}&action=${action}` },
+      { text: `🔴 Sell $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:SELL` },
+      { text: `🔴 Sell $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:SELL` },
+    ],
+    [
+      { text: "📱 Open App", url: `${appUrl}/trade/confirm?alertId=${userAlertId}` },
       { text: "❌ Ignore", callback_data: `ignore:${userAlertId}` },
     ],
   ];

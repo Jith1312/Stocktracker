@@ -82,26 +82,29 @@ async function classifyTweetsWorker() {
 
         if (await shouldCreateAlert(result)) {
           for (const ticker of result.tickers) {
-            if (ticker.action === "BUY" || ticker.action === "SELL") {
-              const asset = await storage.getAssetByTicker(ticker.symbol);
-              if (!asset?.isActive) continue;
+            const tickerSymbol = ticker.ticker || ticker.symbol;
+            const asset = await storage.getAssetByTicker(tickerSymbol);
+            if (!asset?.isActive) continue;
 
-              const classification = await storage.getClassificationByTweetId(tweet.id);
-              if (!classification) continue;
+            const classification = await storage.getClassificationByTweetId(tweet.id);
+            if (!classification) continue;
 
-              const alertEvent = await storage.createAlertEvent({
-                tweetId: tweet.id,
-                classificationId: classification.id,
-                ticker: ticker.symbol,
-                sentiment: ticker.sentiment,
-                action: ticker.action,
-                confidence: ticker.confidence.toString(),
-              });
+            const alertEvent = await storage.createAlertEvent({
+              tweetId: tweet.id,
+              classificationId: classification.id,
+              ticker: tickerSymbol,
+              sentiment: ticker.sentiment || "NEUTRAL",
+              action: "NONE",
+              confidence: ticker.confidence?.toString() || "1.0",
+            });
 
-              console.log(`[Worker] Created alert event for ${ticker.symbol} ${ticker.action}`);
+            console.log(`[Worker] Created alert event for $${tickerSymbol}`);
 
-              await sendAlertsForEvent(alertEvent.id, tweet, ticker);
-            }
+            await sendAlertsForEvent(alertEvent.id, tweet, { 
+              symbol: tickerSymbol, 
+              action: "NONE", 
+              confidence: ticker.confidence || 1.0 
+            });
           }
         }
       } catch (error) {
