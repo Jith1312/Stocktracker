@@ -200,29 +200,32 @@ export async function getQuote(
   amountRaw: string,
   takerAddress?: string
 ): Promise<QuoteResponse> {
-  // Use v6 API instead of Ultra API for more reliability
-  const v6Quote = await getQuoteV6(inputMint, outputMint, amountRaw);
+  // Use Ultra API for RFQ-based trading (required for Ondo tokenized stocks)
+  console.log("[Jupiter] Getting Ultra quote for:", { inputMint, outputMint, amountRaw, takerAddress });
   
-  // Get swap transaction if taker address provided
-  let transaction: string | null = null;
-  if (takerAddress) {
-    const swapData = await getSwapTransactionV6(v6Quote, takerAddress);
-    transaction = swapData.swapTransaction;
-  }
+  const ultraOrder = await getUltraOrder(inputMint, outputMint, amountRaw, takerAddress);
+  
+  console.log("[Jupiter] Ultra order received:", {
+    outAmount: ultraOrder.outAmount,
+    gasless: ultraOrder.gasless,
+    swapType: ultraOrder.swapType,
+    hasTransaction: !!ultraOrder.transaction,
+    requestId: ultraOrder.requestId
+  });
   
   return {
-    inputMint: v6Quote.inputMint,
-    outputMint: v6Quote.outputMint,
-    inAmount: v6Quote.inAmount,
-    outAmount: v6Quote.outAmount,
-    otherAmountThreshold: v6Quote.otherAmountThreshold,
-    swapMode: v6Quote.swapMode,
-    slippageBps: v6Quote.slippageBps,
-    priceImpactPct: v6Quote.priceImpactPct,
-    routePlan: v6Quote.routePlan,
-    requestId: "", // V6 doesn't use requestId
-    transaction: transaction,
-    gasless: false,
+    inputMint: ultraOrder.inputMint,
+    outputMint: ultraOrder.outputMint,
+    inAmount: ultraOrder.inAmount,
+    outAmount: ultraOrder.outAmount,
+    otherAmountThreshold: ultraOrder.otherAmountThreshold,
+    swapMode: ultraOrder.swapMode,
+    slippageBps: ultraOrder.slippageBps,
+    priceImpactPct: ultraOrder.priceImpactPct,
+    routePlan: ultraOrder.routePlan,
+    requestId: ultraOrder.requestId,
+    transaction: ultraOrder.transaction,
+    gasless: ultraOrder.gasless,
   };
 }
 

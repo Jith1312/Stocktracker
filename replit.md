@@ -9,7 +9,7 @@ StockPulse is a trading alert application that monitors X (Twitter) influencer a
 - **Database**: PostgreSQL (Neon)
 - **Authentication**: Privy with Solana embedded wallets
 - **AI**: OpenAI GPT-5.1 via Replit AI Integrations
-- **Trading**: Jupiter Aggregator API for Solana swaps
+- **Trading**: Jupiter Ultra API (RFQ-based) for Ondo tokenized stock swaps
 - **Notifications**: Telegram Bot API
 - **Tweet Source**: X API (optional - stub provider as fallback)
 
@@ -73,6 +73,7 @@ StockPulse is a trading alert application that monitors X (Twitter) influencer a
 - `ADMIN_EMAIL`: Email for admin access
 - `SESSION_SECRET`: Session encryption
 - `X_API_BEARER_TOKEN`: (Optional) X API for real tweet polling
+- `JUPITER_API_KEY`: Jupiter API key for Ultra API access
 
 ## Key Features
 1. **Privy Authentication**: Email, wallet, Google, Twitter login with embedded Solana wallets
