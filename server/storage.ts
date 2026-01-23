@@ -3,7 +3,7 @@ import { eq, desc, and, isNull, lt, sql } from "drizzle-orm";
 import {
   users, influencers, subscriptions, tweets, classifications,
   alertEvents, userAlerts, preparedOrders, trades, assetRegistry,
-  telegramLinkTokens, mutedTickers,
+  telegramLinkTokens, mutedTickers, transfers,
   type User, type InsertUser,
   type Influencer, type InsertInfluencer,
   type Subscription, type InsertSubscription,
@@ -16,6 +16,7 @@ import {
   type AssetRegistryEntry, type InsertAssetRegistryEntry,
   type TelegramLinkToken, type InsertTelegramLinkToken,
   type MutedTicker, type InsertMutedTicker,
+  type Transfer, type InsertTransfer,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -81,6 +82,9 @@ export interface IStorage {
   getMutedTickers(userId: number): Promise<MutedTicker[]>;
   muteTicker(userId: number, ticker: string): Promise<MutedTicker>;
   unmuteTicker(userId: number, ticker: string): Promise<void>;
+
+  getTransfersByUser(userId: number, limit?: number): Promise<Transfer[]>;
+  createTransfer(transfer: InsertTransfer): Promise<Transfer>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -343,6 +347,18 @@ export class DatabaseStorage implements IStorage {
     await db.delete(mutedTickers).where(
       and(eq(mutedTickers.userId, userId), eq(mutedTickers.ticker, ticker))
     );
+  }
+
+  async getTransfersByUser(userId: number, limit: number = 50): Promise<Transfer[]> {
+    return db.select().from(transfers)
+      .where(eq(transfers.userId, userId))
+      .orderBy(desc(transfers.createdAt))
+      .limit(limit);
+  }
+
+  async createTransfer(insertTransfer: InsertTransfer): Promise<Transfer> {
+    const [transfer] = await db.insert(transfers).values(insertTransfer).returning();
+    return transfer;
   }
 }
 

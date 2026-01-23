@@ -877,7 +877,7 @@ export async function registerRoutes(
       const paddedFrac = fracPart.padEnd(decimals, "0").slice(0, decimals);
       const rawAmount = BigInt(wholePart || "0") * multiplier + BigInt(paddedFrac || "0");
       
-      if (rawAmount <= 0n) {
+      if (rawAmount <= BigInt(0)) {
         return res.status(400).json({ error: "Amount too small" });
       }
       
@@ -958,6 +958,24 @@ export async function registerRoutes(
       
       console.log(`[Transfer] Sent ${amount} tokens to ${recipientAddress}, tx: ${signature}`);
       
+      // Determine symbol for the transfer
+      let symbol = "USDC";
+      if (!isUsdc && asset) {
+        symbol = asset.ondoSymbol;
+      }
+      
+      // Save transfer to database
+      await storage.createTransfer({
+        userId: user.id,
+        txSig: signature,
+        tokenMint,
+        amount: rawAmount.toString(),
+        fromAddress: user.solanaPubkey,
+        toAddress: recipientAddress,
+        direction: "outgoing",
+        symbol,
+      });
+      
       res.json({ 
         success: true, 
         signature,
@@ -966,6 +984,34 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[API] Transfer error:", error);
       res.status(500).json({ error: error.message || "Failed to transfer tokens" });
+    }
+  });
+
+  // Get user's transfers
+  app.get("/api/transfers", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const transfersList = await storage.getTransfersByUser(user.id);
+      
+      // Enrich with display amounts
+      const assets = await storage.getAssetRegistry();
+      const enrichedTransfers = transfersList.map((t) => {
+        const asset = assets.find(a => a.solanaMint === t.tokenMint);
+        const isUsdc = t.tokenMint === USDC_MINT;
+        const decimals = isUsdc ? 6 : (asset?.decimals || 9);
+        const amountDisplay = (parseFloat(t.amount) / Math.pow(10, decimals)).toFixed(isUsdc ? 2 : 6);
+        
+        return {
+          ...t,
+          amountDisplay,
+          symbol: t.symbol || (isUsdc ? "USDC" : asset?.ondoSymbol || "Unknown"),
+        };
+      });
+      
+      res.json(enrichedTransfers);
+    } catch (error: any) {
+      console.error("[API] Get transfers error:", error);
+      res.status(500).json({ error: error.message || "Failed to get transfers" });
     }
   });
 

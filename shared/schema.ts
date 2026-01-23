@@ -136,6 +136,19 @@ export const mutedTickers = pgTable("muted_tickers", {
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
+export const transfers = pgTable("transfers", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  txSig: text("tx_sig").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  amount: text("amount").notNull(),
+  fromAddress: text("from_address").notNull(),
+  toAddress: text("to_address").notNull(),
+  direction: text("direction").notNull(), // 'incoming' or 'outgoing'
+  symbol: text("symbol"),
+  createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
+});
+
 export const usersRelations = relations(users, ({ many }) => ({
   subscriptions: many(subscriptions),
   userAlerts: many(userAlerts),
@@ -188,6 +201,7 @@ export const insertTradeSchema = createInsertSchema(trades).omit({ id: true, cre
 export const insertAssetRegistrySchema = createInsertSchema(assetRegistry).omit({ id: true, createdAt: true });
 export const insertTelegramLinkTokenSchema = createInsertSchema(telegramLinkTokens).omit({ id: true, createdAt: true });
 export const insertMutedTickerSchema = createInsertSchema(mutedTickers).omit({ id: true, createdAt: true });
+export const insertTransferSchema = createInsertSchema(transfers).omit({ id: true, createdAt: true });
 
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -213,6 +227,8 @@ export type TelegramLinkToken = typeof telegramLinkTokens.$inferSelect;
 export type InsertTelegramLinkToken = z.infer<typeof insertTelegramLinkTokenSchema>;
 export type MutedTicker = typeof mutedTickers.$inferSelect;
 export type InsertMutedTicker = z.infer<typeof insertMutedTickerSchema>;
+export type Transfer = typeof transfers.$inferSelect;
+export type InsertTransfer = z.infer<typeof insertTransferSchema>;
 
 export const classificationResultSchema = z.object({
   is_actionable: z.boolean(),
