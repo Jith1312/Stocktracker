@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { Redirect } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -25,6 +26,10 @@ import {
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 
+interface UserProfile {
+  isAdmin?: boolean;
+}
+
 const assetSchema = z.object({
   underlyingTicker: z.string().min(1, "Ticker is required").max(10),
   ondoSymbol: z.string().min(1, "Ondo symbol is required"),
@@ -41,8 +46,13 @@ export default function Admin() {
   const [editingAsset, setEditingAsset] = useState<any>(null);
   const { toast } = useToast();
 
+  const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
+    queryKey: ["/api/user/profile"],
+  });
+
   const { data: assets, isLoading } = useQuery({
     queryKey: ["/api/admin/assets"],
+    enabled: profile?.isAdmin,
   });
 
   const form = useForm<AssetForm>({
@@ -99,6 +109,20 @@ export default function Admin() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/assets"] });
     },
   });
+
+  if (profileLoading) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center h-64">
+          <div className="animate-pulse text-muted-foreground">Loading...</div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (!profile?.isAdmin) {
+    return <Redirect to="/dashboard" />;
+  }
 
   const openEditDialog = (asset: any) => {
     setEditingAsset(asset);

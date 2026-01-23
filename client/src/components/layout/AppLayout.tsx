@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { usePrivy } from "@privy-io/react-auth";
+import { useQuery } from "@tanstack/react-query";
 import { 
   LayoutDashboard, 
   Users, 
@@ -7,7 +8,8 @@ import {
   Wallet, 
   Settings,
   LogOut,
-  Zap
+  Zap,
+  Shield
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -26,6 +28,10 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 
+interface UserProfile {
+  isAdmin?: boolean;
+}
+
 const navItems = [
   { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { path: "/influencers", label: "Influencers", icon: Users },
@@ -36,10 +42,16 @@ const navItems = [
 
 function AppSidebar() {
   const [location] = useLocation();
-  const { user, logout } = usePrivy();
+  const { user, logout, authenticated } = usePrivy();
+
+  const { data: profile } = useQuery<UserProfile>({
+    queryKey: ["/api/user/profile"],
+    enabled: authenticated,
+  });
 
   const userEmail = user?.email?.address || user?.wallet?.address?.slice(0, 8) + "...";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
+  const isAdmin = profile?.isAdmin || false;
 
   return (
     <Sidebar>
@@ -79,21 +91,23 @@ function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <SidebarGroup>
-          <SidebarGroupLabel>Settings</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={location === "/admin"}>
-                  <Link href="/admin">
-                    <Settings className="w-5 h-5" />
-                    <span>Admin</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Admin</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/admin"}>
+                    <Link href="/admin">
+                      <Shield className="w-5 h-5" />
+                      <span>Asset Registry</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">

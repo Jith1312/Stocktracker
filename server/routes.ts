@@ -140,9 +140,10 @@ export async function registerRoutes(
         await storage.updateUser(user.id, { solanaPubkey: walletAddress });
       }
 
+      const userEmail = user.email || privyUser?.email?.address;
       res.json({
         id: user.id,
-        email: user.email || privyUser?.email?.address,
+        email: userEmail,
         solanaPubkey: walletAddress,
         telegramChatId: user.telegramChatId,
         telegramUsername: user.telegramUsername,
@@ -151,6 +152,7 @@ export async function registerRoutes(
         signerEnabled: user.signerEnabled,
         privyWalletId: user.privyWalletId,
         onboardingCompleted: user.onboardingCompleted,
+        isAdmin: userEmail === ADMIN_EMAIL,
       });
     } catch (error) {
       console.error("[API] Profile error:", error);
