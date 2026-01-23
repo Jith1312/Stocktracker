@@ -44,12 +44,22 @@ export default function Onboarding() {
   const [copied, setCopied] = useState(false);
   const [isEnabling, setIsEnabling] = useState(false);
   
-  const embeddedWallet = wallets.find(w => 
+  // Find the embedded Privy Solana wallet from useWallets hook
+  const embeddedWalletFromHook = wallets.find(w => 
     w.walletClientType === "privy" && 
     (w as any).chainType === "solana"
   ) || wallets.find(w => w.walletClientType === "privy");
   
-  const embeddedWalletAddress = embeddedWallet?.address;
+  // Also check user.linkedAccounts for embedded Solana wallet as fallback
+  const embeddedWalletFromUser = user?.linkedAccounts?.find(
+    (account: any) => account.type === "wallet" && 
+                       account.walletClientType === "privy" && 
+                       account.chainType === "solana"
+  );
+  
+  // Use either source - prefer the hook for address access
+  const embeddedWallet = embeddedWalletFromHook || embeddedWalletFromUser;
+  const embeddedWalletAddress = embeddedWalletFromHook?.address || (embeddedWalletFromUser as any)?.address;
   
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
     queryKey: ["/api/user/profile"],
