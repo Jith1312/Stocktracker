@@ -194,6 +194,7 @@ export async function registerRoutes(
         signerEnabled: user.signerEnabled || false,
         privyWalletId: user.privyWalletId,
         autoExecuteEnabled: user.autoExecuteEnabled || false,
+        authKeyConfigured: !!process.env.PRIVY_AUTHORIZATION_KEY,
       });
     } catch (error) {
       console.error("[API] Signer status error:", error);
