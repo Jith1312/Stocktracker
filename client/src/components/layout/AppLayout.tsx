@@ -50,7 +50,7 @@ function AppSidebar() {
               <Zap className="w-6 h-6 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-foreground">StockPulse</h1>
+              <h1 className="text-lg font-bold text-foreground">Arena</h1>
               <p className="text-xs text-muted-foreground">Trade on signals</p>
             </div>
           </div>

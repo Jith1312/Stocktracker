@@ -175,7 +175,7 @@ export default function Onboarding() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-lg space-y-6">
         <div className="text-center">
-          <h1 className="text-3xl font-bold">Welcome to StockPulse</h1>
+          <h1 className="text-3xl font-bold">Welcome to Arena</h1>
           <p className="text-muted-foreground mt-2">Let's get you set up for trading</p>
         </div>
         

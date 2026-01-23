@@ -1,7 +1,7 @@
-# StockPulse - X Influencer Trading Alert App
+# Arena - X Influencer Trading Alert App
 
 ## Overview
-StockPulse is a trading alert application that monitors X (Twitter) influencer accounts for stock trading signals, uses AI (GPT-5.1) to classify tweets and identify actionable buy/sell recommendations, sends real-time Telegram alerts to subscribed users, and enables one-tap execution of Solana onchain trades via Jupiter (USDC → Ondo tokenized stocks).
+Arena is a trading alert application that monitors X (Twitter) influencer accounts for stock trading signals, uses AI (GPT-5.1) to classify tweets and identify actionable buy/sell recommendations, sends real-time Telegram alerts to subscribed users, and enables one-tap execution of Solana onchain trades via Jupiter (USDC → Ondo tokenized stocks).
 
 ## Tech Stack
 - **Frontend**: React + TypeScript + Vite + TanStack Query + shadcn/ui + Tailwind CSS

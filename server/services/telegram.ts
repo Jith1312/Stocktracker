@@ -194,7 +194,7 @@ export async function setBotCommands(): Promise<boolean> {
   if (!botToken) return false;
 
   const commands = [
-    { command: "start", description: "Link your Telegram to StockPulse" },
+    { command: "start", description: "Link your Telegram to Arena" },
     { command: "help", description: "Show available commands" },
     { command: "balance", description: "View your wallet balance" },
     { command: "portfolio", description: "View your token holdings" },

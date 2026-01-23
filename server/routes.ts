@@ -1075,14 +1075,14 @@ export async function registerRoutes(
       if (message?.text === "/start") {
         await telegram.sendMessage({
           chatId: message.chat.id.toString(),
-          text: "Welcome to StockPulse! To connect your account, please use the link from the app.",
+          text: "Welcome to Arena! To connect your account, please use the link from the app.",
         });
       }
 
       if (message?.text === "/help") {
         await telegram.sendMessage({
           chatId: message.chat.id.toString(),
-          text: `📊 <b>StockPulse Bot Commands</b>
+          text: `📊 <b>Arena Bot Commands</b>
 
 /help - Show this message
 /balance - Show your wallet balance
