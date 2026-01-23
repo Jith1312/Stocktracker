@@ -27,94 +27,100 @@ export class StubTweetProvider implements TweetProvider {
   }
 }
 
-export class XApiTweetProvider implements TweetProvider {
-  private bearerToken: string;
+export class TwitterApiIoProvider implements TweetProvider {
+  private apiKey: string;
+  private baseUrl = "https://api.twitterapi.io";
 
-  constructor(bearerToken: string) {
-    this.bearerToken = bearerToken;
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
   }
 
   async fetchTweets(handle: string, sinceId?: string): Promise<TweetData[]> {
     try {
-      const userInfo = await this.getUserInfo(handle);
-      if (!userInfo?.userId) {
-        console.log(`[XApiTweetProvider] Could not find user: @${handle}`);
-        return [];
-      }
-
-      let url = `https://api.twitter.com/2/users/${userInfo.userId}/tweets?max_results=10&tweet.fields=created_at`;
-      if (sinceId) {
-        url += `&since_id=${sinceId}`;
-      }
-
+      const url = `${this.baseUrl}/twitter/user/last_tweets?userName=${encodeURIComponent(handle)}`;
+      
       const response = await fetch(url, {
         headers: {
-          Authorization: `Bearer ${this.bearerToken}`,
+          "X-API-Key": this.apiKey,
         },
       });
 
       if (!response.ok) {
-        console.error(`[XApiTweetProvider] API error: ${response.status}`);
+        const errorText = await response.text();
+        console.error(`[TwitterApiIo] API error ${response.status}: ${errorText}`);
         return [];
       }
 
       const data = await response.json();
-      if (!data.data) {
+      
+      if (data.status !== "success" || !data.tweets) {
+        console.log(`[TwitterApiIo] No tweets found for @${handle}: ${data.message || "empty"}`);
         return [];
       }
 
-      return data.data.map((tweet: any) => ({
-        tweetId: tweet.id,
-        text: tweet.text,
-        url: `https://x.com/${handle}/status/${tweet.id}`,
-        createdAt: new Date(tweet.created_at),
-        rawJson: tweet,
-      }));
+      const tweets = data.tweets
+        .filter((tweet: any) => {
+          if (!sinceId) return true;
+          return tweet.id > sinceId;
+        })
+        .map((tweet: any) => ({
+          tweetId: tweet.id,
+          text: tweet.text,
+          url: tweet.url || `https://x.com/${handle}/status/${tweet.id}`,
+          createdAt: new Date(tweet.createdAt),
+          rawJson: tweet,
+        }));
+
+      console.log(`[TwitterApiIo] Fetched ${tweets.length} tweets for @${handle}`);
+      return tweets;
     } catch (error) {
-      console.error(`[XApiTweetProvider] Error fetching tweets:`, error);
+      console.error(`[TwitterApiIo] Error fetching tweets:`, error);
       return [];
     }
   }
 
   async getUserInfo(handle: string): Promise<{ userId?: string; displayName?: string; avatarUrl?: string } | null> {
     try {
-      const response = await fetch(
-        `https://api.twitter.com/2/users/by/username/${handle}?user.fields=profile_image_url,name`,
-        {
-          headers: {
-            Authorization: `Bearer ${this.bearerToken}`,
-          },
-        }
-      );
+      const url = `${this.baseUrl}/twitter/user/info?userName=${encodeURIComponent(handle)}`;
+      
+      const response = await fetch(url, {
+        headers: {
+          "X-API-Key": this.apiKey,
+        },
+      });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[TwitterApiIo] User info error ${response.status}: ${errorText}`);
         return null;
       }
 
       const data = await response.json();
-      if (!data.data) {
+      
+      if (data.status !== "success" || !data.data) {
+        console.log(`[TwitterApiIo] User not found: @${handle}`);
         return null;
       }
 
       return {
         userId: data.data.id,
         displayName: data.data.name,
-        avatarUrl: data.data.profile_image_url,
+        avatarUrl: data.data.profilePicture,
       };
     } catch (error) {
-      console.error(`[XApiTweetProvider] Error fetching user info:`, error);
+      console.error(`[TwitterApiIo] Error fetching user info:`, error);
       return null;
     }
   }
 }
 
 export function createTweetProvider(): TweetProvider {
-  const bearerToken = process.env.X_API_BEARER_TOKEN;
-  if (bearerToken) {
-    console.log("[TweetProvider] Using X API with bearer token");
-    return new XApiTweetProvider(bearerToken);
+  const apiKey = process.env.X_API_BEARER_TOKEN;
+  if (apiKey) {
+    console.log("[TweetProvider] Using TwitterAPI.io");
+    return new TwitterApiIoProvider(apiKey);
   }
-  console.log("[TweetProvider] Using stub provider (no X API credentials)");
+  console.log("[TweetProvider] Using stub provider (no API key)");
   return new StubTweetProvider();
 }
 
