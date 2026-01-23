@@ -573,16 +573,63 @@ export async function registerRoutes(
         }
       }
       
+      // Calculate cost basis from trades for each token
+      const costBasisByMint: Record<string, { totalCost: number; totalTokens: number }> = {};
+      
+      for (const trade of trades) {
+        // Buy trades (USDC -> Token): add to cost basis
+        if (trade.inputMint === USDC_MINT && trade.outputMint && trade.amountIn && trade.amountOut) {
+          const usdcSpent = parseFloat(trade.amountIn) / 1_000_000;
+          const tokensReceived = parseFloat(trade.amountOut) / 1_000_000_000;
+          
+          if (!costBasisByMint[trade.outputMint]) {
+            costBasisByMint[trade.outputMint] = { totalCost: 0, totalTokens: 0 };
+          }
+          costBasisByMint[trade.outputMint].totalCost += usdcSpent;
+          costBasisByMint[trade.outputMint].totalTokens += tokensReceived;
+        }
+        // Sell trades (Token -> USDC): reduce position proportionally
+        if (trade.outputMint === USDC_MINT && trade.inputMint && trade.amountIn && trade.amountOut) {
+          const tokensSold = parseFloat(trade.amountIn) / 1_000_000_000;
+          
+          if (costBasisByMint[trade.inputMint] && costBasisByMint[trade.inputMint].totalTokens > 0) {
+            const proportionSold = tokensSold / costBasisByMint[trade.inputMint].totalTokens;
+            costBasisByMint[trade.inputMint].totalCost *= (1 - proportionSold);
+            costBasisByMint[trade.inputMint].totalTokens -= tokensSold;
+          }
+        }
+      }
+      
       // Add USD values (prefer Jupiter price, fall back to trade-derived price)
       const holdingsWithValue = validHoldings.map(h => {
         const price = prices[h.mint] || tradePrices[h.mint] || null;
+        const currentValue = price ? h.balanceNum * price : null;
+        
+        const costData = costBasisByMint[h.mint];
+        const avgCostBasis = costData && costData.totalTokens > 0 
+          ? costData.totalCost / costData.totalTokens 
+          : null;
+        const totalCostBasis = costData?.totalCost || null;
+        
+        let profitLoss = null;
+        let profitLossPct = null;
+        
+        if (currentValue !== null && totalCostBasis !== null && totalCostBasis > 0) {
+          profitLoss = currentValue - totalCostBasis;
+          profitLossPct = ((currentValue - totalCostBasis) / totalCostBasis) * 100;
+        }
+        
         return {
           mint: h.mint,
           symbol: h.symbol,
           underlyingTicker: h.underlyingTicker,
           balance: h.balance,
-          usdValue: price ? h.balanceNum * price : null,
+          usdValue: currentValue,
           price: price,
+          avgCostBasis: avgCostBasis,
+          totalCostBasis: totalCostBasis,
+          profitLoss: profitLoss,
+          profitLossPct: profitLossPct,
         };
       });
       

@@ -509,48 +509,73 @@ export default function Portfolio() {
                         <TableHead>Asset</TableHead>
                         <TableHead className="text-right">Balance</TableHead>
                         <TableHead className="text-right">USD Value</TableHead>
+                        <TableHead className="text-right">P&L</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {holdings.map((holding: any) => (
-                        <TableRow key={holding.mint} data-testid={`holding-row-${holding.symbol}`}>
-                          <TableCell>
-                            <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                                <span className="text-sm font-bold text-primary">
-                                  {holding.symbol?.slice(0, 2)}
-                                </span>
+                      {holdings.map((holding: any) => {
+                        const isProfit = holding.profitLoss !== null && holding.profitLoss >= 0;
+                        const hasData = holding.profitLoss !== null;
+                        
+                        return (
+                          <TableRow key={holding.mint} data-testid={`holding-row-${holding.symbol}`}>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                                  <span className="text-sm font-bold text-primary">
+                                    {holding.symbol?.slice(0, 2)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className="font-medium">{holding.symbol}</p>
+                                  <p className="text-sm text-muted-foreground">{holding.underlyingTicker}</p>
+                                </div>
                               </div>
-                              <div>
-                                <p className="font-medium">{holding.symbol}</p>
-                                <p className="text-sm text-muted-foreground">{holding.underlyingTicker}</p>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right font-mono">
-                            {holding.balance}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="font-mono">${holding.usdValue?.toFixed(2) || "—"}</div>
-                            {holding.price && (
-                              <div className="text-xs text-muted-foreground">
-                                @${holding.price.toFixed(2)}/token
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              data-testid={`button-sell-${holding.symbol}`}
-                              onClick={() => handleSellClick(holding.underlyingTicker, holding.balance)}
-                            >
-                              Sell
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {holding.balance}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="font-mono">${holding.usdValue?.toFixed(2) || "—"}</div>
+                              {holding.price && (
+                                <div className="text-xs text-muted-foreground">
+                                  @${holding.price.toFixed(2)}/token
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {hasData ? (
+                                <div className={`flex flex-col items-end ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
+                                  <div className="flex items-center gap-1 font-mono">
+                                    {isProfit ? (
+                                      <TrendingUp className="w-4 h-4" />
+                                    ) : (
+                                      <TrendingDown className="w-4 h-4" />
+                                    )}
+                                    {isProfit ? '+' : ''}${holding.profitLoss?.toFixed(2)}
+                                  </div>
+                                  <div className="text-xs">
+                                    {isProfit ? '+' : ''}{holding.profitLossPct?.toFixed(1)}%
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                data-testid={`button-sell-${holding.symbol}`}
+                                onClick={() => handleSellClick(holding.underlyingTicker, holding.balance)}
+                              >
+                                Sell
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </CardContent>
