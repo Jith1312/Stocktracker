@@ -178,9 +178,42 @@ export async function setWebhook(webhookUrl: string): Promise<boolean> {
 
     const data = await response.json();
     console.log("[Telegram] Set webhook result:", data);
+    
+    // Set bot commands so users see them when typing /
+    await setBotCommands();
+    
     return data.ok;
   } catch (error) {
     console.error("[Telegram] Error setting webhook:", error);
+    return false;
+  }
+}
+
+export async function setBotCommands(): Promise<boolean> {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return false;
+
+  const commands = [
+    { command: "start", description: "Link your Telegram to StockPulse" },
+    { command: "help", description: "Show available commands" },
+    { command: "balance", description: "View your wallet balance" },
+    { command: "portfolio", description: "View your token holdings" },
+    { command: "sell", description: "Sell stock tokens" },
+    { command: "trades", description: "View your recent trades" },
+  ];
+
+  try {
+    const response = await fetch(`${TELEGRAM_API_URL}/bot${botToken}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands }),
+    });
+
+    const data = await response.json();
+    console.log("[Telegram] Set bot commands result:", data);
+    return data.ok;
+  } catch (error) {
+    console.error("[Telegram] Error setting bot commands:", error);
     return false;
   }
 }

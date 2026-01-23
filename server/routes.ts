@@ -1397,6 +1397,58 @@ export async function registerRoutes(
         }
       }
 
+      // Handle /trades command - show recent trades only
+      if (message?.text === "/trades") {
+        const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
+        
+        if (!user) {
+          await telegram.sendMessage({
+            chatId: message.chat.id.toString(),
+            text: "Please connect your account first using the link from the app.",
+          });
+        } else {
+          const trades = await storage.getTradesByUser(user.id);
+          const recentTrades = trades.slice(0, 10);
+          
+          if (recentTrades.length === 0) {
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: "No trades yet. Execute your first trade from an alert!",
+            });
+          } else {
+            const allAssets = await storage.getAssetRegistry();
+            const assetByMint = new Map(allAssets.map(a => [a.solanaMint, a]));
+            
+            let tradesText = `<b>Recent Trades</b>\n`;
+            
+            for (const trade of recentTrades) {
+              const date = new Date(trade.createdAt!).toLocaleDateString();
+              const inputAsset = assetByMint.get(trade.inputMint);
+              const outputAsset = assetByMint.get(trade.outputMint);
+              
+              const inputSymbol = inputAsset?.underlyingTicker || (trade.inputMint === USDC_MINT ? "USDC" : trade.inputMint?.slice(0, 6) + "...");
+              const outputSymbol = outputAsset?.underlyingTicker || (trade.outputMint === USDC_MINT ? "USDC" : trade.outputMint?.slice(0, 6) + "...");
+              
+              const inputAmount = trade.inputMint === USDC_MINT 
+                ? `$${jupiter.rawAmountToDisplay(trade.amountIn || "0", 6)}`
+                : jupiter.rawAmountToDisplay(trade.amountIn || "0", 9);
+              const outputAmount = trade.outputMint === USDC_MINT 
+                ? `$${jupiter.rawAmountToDisplay(trade.amountOut || "0", 6)}`
+                : jupiter.rawAmountToDisplay(trade.amountOut || "0", 9);
+              
+              const status = trade.status === "completed" ? "Done" : trade.status === "failed" ? "Fail" : trade.status;
+              tradesText += `\n${inputAmount} ${inputSymbol} -> ${outputAmount} ${outputSymbol} (${date}) [${status}]`;
+            }
+            
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: tradesText,
+              parseMode: "HTML",
+            });
+          }
+        }
+      }
+
       if (message?.text?.startsWith("/amount ")) {
         const amountStr = message.text.split(" ")[1];
         const amount = parseFloat(amountStr);
