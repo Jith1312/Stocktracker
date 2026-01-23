@@ -1,4 +1,4 @@
-import { Link } from "wouter";
+import { Link, Redirect } from "wouter";
 import { usePrivy } from "@privy-io/react-auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,7 +16,11 @@ import {
 import { SiSolana, SiTelegram, SiX } from "react-icons/si";
 
 export default function Landing() {
-  const { login, authenticated } = usePrivy();
+  const { login, authenticated, ready } = usePrivy();
+
+  if (ready && authenticated) {
+    return <Redirect to="/dashboard" />;
+  }
 
   return (
     <div className="min-h-screen bg-background">
