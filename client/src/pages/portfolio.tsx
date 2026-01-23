@@ -14,7 +14,8 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Clock,
-  Loader2
+  Loader2,
+  DollarSign
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
@@ -29,7 +30,11 @@ export default function Portfolio() {
   
   const isReady = ready && authenticated;
   
-  const { data: holdings, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<any[]>({
+  const { data: portfolioData, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<{
+    holdings: any[];
+    usdcBalance: number;
+    totalValue: number;
+  }>({
     queryKey: ["/api/portfolio/holdings"],
     enabled: isReady,
     staleTime: 0,
@@ -48,6 +53,10 @@ export default function Portfolio() {
       refetchTrades();
     }
   }, [isReady]);
+  
+  const holdings = portfolioData?.holdings || [];
+  const usdcBalance = portfolioData?.usdcBalance || 0;
+  const totalValue = portfolioData?.totalValue || 0;
 
   const sellMutation = useMutation({
     mutationFn: async ({ ticker, amount }: { ticker: string; amount: string }) => {
@@ -78,9 +87,6 @@ export default function Portfolio() {
     sellMutation.mutate({ ticker, amount: balance });
   };
 
-  const totalValue = Array.isArray(holdings) 
-    ? holdings.reduce((acc: number, h: any) => acc + (h.usdValue || 0), 0) 
-    : 0;
 
   return (
     <AppLayout>
@@ -90,7 +96,7 @@ export default function Portfolio() {
           <p className="text-muted-foreground mt-1">View your holdings and trade history</p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Total Holdings</CardTitle>
@@ -104,7 +110,7 @@ export default function Portfolio() {
                   <div className="text-2xl font-bold" data-testid="text-total-value">
                     ${totalValue.toFixed(2)}
                   </div>
-                  <p className="text-xs text-muted-foreground">Estimated USD value</p>
+                  <p className="text-xs text-muted-foreground">USDC + Stocks value</p>
                 </>
               )}
             </CardContent>
@@ -112,7 +118,26 @@ export default function Portfolio() {
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Assets</CardTitle>
+              <CardTitle className="text-sm font-medium">USDC Balance</CardTitle>
+              <DollarSign className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {holdingsLoading ? (
+                <Skeleton className="h-8 w-24" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold" data-testid="text-usdc-balance">
+                    ${usdcBalance.toFixed(2)}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Available for trading</p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Stock Assets</CardTitle>
               <TrendingUp className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -260,32 +285,41 @@ export default function Portfolio() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Type</TableHead>
-                        <TableHead>Asset</TableHead>
-                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Sold</TableHead>
+                        <TableHead>Received</TableHead>
                         <TableHead className="text-right">Status</TableHead>
                         <TableHead className="text-right">Time</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {trades.map((trade: any) => {
-                        const isBuy = trade.inputMint?.includes("USDC");
                         return (
                           <TableRow key={trade.id} data-testid={`trade-row-${trade.id}`}>
                             <TableCell>
-                              <div className={`flex items-center gap-2 ${isBuy ? "text-green-500" : "text-red-500"}`}>
-                                {isBuy ? (
+                              <div className={`flex items-center gap-2 ${trade.isBuy ? "text-green-500" : "text-red-500"}`}>
+                                {trade.isBuy ? (
                                   <ArrowUpRight className="w-4 h-4" />
                                 ) : (
                                   <ArrowDownRight className="w-4 h-4" />
                                 )}
-                                <span className="font-medium">{isBuy ? "Buy" : "Sell"}</span>
+                                <span className="font-medium">{trade.isBuy ? "Buy" : "Sell"}</span>
                               </div>
                             </TableCell>
-                            <TableCell className="font-medium">
-                              {trade.outputSymbol || trade.outputMint?.slice(0, 8)}
+                            <TableCell>
+                              <div className="font-medium">{trade.inputTicker}</div>
+                              <div className="text-sm text-muted-foreground font-mono">
+                                {trade.inputAmountDisplay} {trade.inputTicker === "USDC" ? "USDC" : "tokens"}
+                              </div>
                             </TableCell>
-                            <TableCell className="text-right font-mono">
-                              ${(parseFloat(trade.amountIn) / 1000000).toFixed(2)}
+                            <TableCell>
+                              <div className="font-medium">{trade.outputTicker}</div>
+                              <div className="text-sm text-muted-foreground font-mono">
+                                {trade.outputAmountDisplay ? (
+                                  <>{trade.outputAmountDisplay} {trade.outputTicker === "USDC" ? "USDC" : "tokens"}</>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
                               <Badge 

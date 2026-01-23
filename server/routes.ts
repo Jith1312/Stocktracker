@@ -431,7 +431,41 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       const trades = await storage.getTradesByUser(user.id);
-      res.json(trades);
+      const assets = await storage.getAssetRegistry();
+      
+      // Create a mint to asset lookup
+      const mintToAsset: Record<string, any> = {};
+      for (const asset of assets) {
+        mintToAsset[asset.solanaMint] = asset;
+      }
+      
+      // Enrich trades with token info
+      const enrichedTrades = trades.map(trade => {
+        const inputAsset = mintToAsset[trade.inputMint || ""];
+        const outputAsset = mintToAsset[trade.outputMint || ""];
+        const isUsdcInput = trade.inputMint === USDC_MINT;
+        const isUsdcOutput = trade.outputMint === USDC_MINT;
+        
+        // Calculate display amounts
+        const inputDecimals = isUsdcInput ? 6 : (inputAsset?.decimals || 9);
+        const outputDecimals = isUsdcOutput ? 6 : (outputAsset?.decimals || 9);
+        
+        const inputAmount = trade.amountIn ? parseFloat(trade.amountIn) / Math.pow(10, inputDecimals) : 0;
+        const outputAmount = trade.amountOut ? parseFloat(trade.amountOut) / Math.pow(10, outputDecimals) : null;
+        
+        return {
+          ...trade,
+          inputSymbol: isUsdcInput ? "USDC" : (inputAsset?.ondoSymbol || inputAsset?.underlyingTicker || "Unknown"),
+          outputSymbol: isUsdcOutput ? "USDC" : (outputAsset?.ondoSymbol || outputAsset?.underlyingTicker || "Unknown"),
+          inputTicker: isUsdcInput ? "USDC" : (inputAsset?.underlyingTicker || "Unknown"),
+          outputTicker: isUsdcOutput ? "USDC" : (outputAsset?.underlyingTicker || "Unknown"),
+          inputAmountDisplay: inputAmount.toFixed(isUsdcInput ? 2 : 6),
+          outputAmountDisplay: outputAmount?.toFixed(isUsdcOutput ? 2 : 6) || null,
+          isBuy: isUsdcInput, // Buying tokens with USDC
+        };
+      });
+      
+      res.json(enrichedTrades);
     } catch (error) {
       console.error("[API] Trades error:", error);
       res.status(500).json({ error: "Failed to get trades" });
@@ -442,11 +476,15 @@ export async function registerRoutes(
     try {
       const user = (req as any).user;
       if (!user.solanaPubkey) {
-        return res.json([]);
+        return res.json({ holdings: [], usdcBalance: 0, totalValue: 0 });
       }
 
+      // Get USDC balance
+      const usdcBalance = await jupiter.getTokenBalance(connection, user.solanaPubkey, USDC_MINT);
+      const usdcDisplayBalance = parseFloat(jupiter.rawAmountToDisplay(usdcBalance.balance, 6));
+
       const assets = await storage.getAssetRegistry();
-      const activeAssets = assets.filter(a => a.isActive);
+      const activeAssets = assets.filter(a => a.isActive && a.solanaMint !== USDC_MINT);
       
       // First, get all balances
       const holdingsWithBalance = await Promise.all(activeAssets.map(async (asset) => {
@@ -516,7 +554,15 @@ export async function registerRoutes(
         };
       });
       
-      res.json(holdingsWithValue);
+      // Calculate total: USDC + stock holdings
+      const stocksValue = holdingsWithValue.reduce((acc, h) => acc + (h.usdValue || 0), 0);
+      const totalValue = usdcDisplayBalance + stocksValue;
+      
+      res.json({ 
+        holdings: holdingsWithValue, 
+        usdcBalance: usdcDisplayBalance,
+        totalValue: totalValue
+      });
     } catch (error) {
       console.error("[API] Holdings error:", error);
       res.status(500).json({ error: "Failed to get holdings" });
