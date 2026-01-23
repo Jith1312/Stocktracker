@@ -682,21 +682,30 @@ export async function registerRoutes(
               console.error("[Telegram] Error fetching USDC balance:", e);
             }
 
-            // Fetch Ondo token holdings
+            // Fetch all token holdings in a single RPC call
             const assets = await storage.getAssetRegistry();
-            const activeAssets = assets.filter(a => a.isActive && a.underlyingTicker !== "USDC");
+            const assetsByMint = new Map(assets.map(a => [a.solanaMint, a]));
             const holdings: { ticker: string; balance: string }[] = [];
             
-            for (const asset of activeAssets) {
-              try {
-                const result = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-                const displayBalance = jupiter.rawAmountToDisplay(result.balance, asset.decimals);
-                if (parseFloat(displayBalance) > 0) {
-                  holdings.push({ ticker: asset.underlyingTicker, balance: displayBalance });
+            try {
+              const allTokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, {
+                programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+              });
+              
+              for (const { account } of allTokenAccounts.value) {
+                const info = account.data.parsed.info;
+                const mint = info.mint;
+                const asset = assetsByMint.get(mint);
+                
+                if (asset && asset.underlyingTicker !== "USDC" && parseFloat(info.tokenAmount.uiAmountString) > 0) {
+                  holdings.push({
+                    ticker: asset.underlyingTicker,
+                    balance: parseFloat(info.tokenAmount.uiAmountString).toFixed(2)
+                  });
                 }
-              } catch (e) {
-                // Skip tokens with errors
               }
+            } catch (e) {
+              console.error("[Telegram] Error fetching token accounts:", e);
             }
 
             const trades = await storage.getTradesByUser(user.id);
