@@ -192,35 +192,27 @@ export async function signSolanaTransaction(
       return { signedTransaction: directBase64 };
     }
     
-    // Otherwise, reconstruct from signatures and message
-    console.log("[Privy] Reconstructing transaction from response components...");
+    // Privy returns a plain object with signatures and message
+    // We need to properly reconstruct the signed transaction
+    console.log("[Privy] Reconstructing signed transaction...");
     
-    // Debug: Check all signatures
+    // Debug: Check all signatures from Privy response
     if (signedTx && signedTx.signatures) {
       const sigs = signedTx.signatures;
-      console.log("[Privy] Signatures count:", sigs.length);
+      console.log("[Privy] Privy response signatures count:", sigs.length);
       sigs.forEach((sig: any, idx: number) => {
-        const sigArray = sig instanceof Uint8Array ? sig : Object.values(sig);
+        const sigArray = sig instanceof Uint8Array ? sig : (Array.isArray(sig) ? sig : Object.values(sig));
         const isZero = (sigArray as number[]).every((b: number) => b === 0);
         const firstBytes = (sigArray as number[]).slice(0, 4);
-        console.log(`[Privy] Signature ${idx}: isZero=${isZero}, first4bytes=[${firstBytes.join(',')}]`);
+        console.log(`[Privy] Privy sig ${idx}: isZero=${isZero}, first4bytes=[${firstBytes.join(',')}]`);
       });
     }
     
-    // Also check original transaction signatures for comparison
-    console.log("[Privy] Original tx signatures count:", transaction.signatures.length);
-    transaction.signatures.forEach((sig, idx) => {
-      const isZero = sig.every((b: number) => b === 0);
-      console.log(`[Privy] Original sig ${idx}: isZero=${isZero}`);
-    });
-    
-    // Copy signatures from response directly into the original transaction
-    console.log("[Privy] Copying signatures from response to original transaction...");
-    
-    // Extract signatures from the response
+    // For gasless RFQ: index 0 = market maker (empty), index 1 = user (signed)
+    // Copy the Privy signatures to our original transaction
     const responseSignatures = signedTx.signatures;
     
-    for (let i = 0; i < responseSignatures.length; i++) {
+    for (let i = 0; i < responseSignatures.length && i < transaction.signatures.length; i++) {
       const sig = responseSignatures[i];
       let sigBytes: Uint8Array;
       
@@ -228,24 +220,40 @@ export async function signSolanaTransaction(
         sigBytes = sig;
       } else if (ArrayBuffer.isView(sig)) {
         sigBytes = new Uint8Array(sig.buffer, sig.byteOffset, sig.byteLength);
+      } else if (Array.isArray(sig)) {
+        // Array of numbers
+        sigBytes = new Uint8Array(sig);
       } else if (typeof sig === 'object') {
-        // Plain object with numeric keys
-        sigBytes = new Uint8Array(64);
-        for (let j = 0; j < 64; j++) {
-          sigBytes[j] = sig[j] || 0;
-        }
+        // Plain object with numeric keys (Buffer serialized as JSON)
+        const values = Object.values(sig) as number[];
+        sigBytes = new Uint8Array(values);
       } else {
         sigBytes = new Uint8Array(64);
       }
       
       const isZero = sigBytes.every((b: number) => b === 0);
-      console.log(`[Privy] Sig ${i}: isZero=${isZero}, first4=[${sigBytes.slice(0, 4).join(',')}]`);
+      console.log(`[Privy] Copying sig ${i}: isZero=${isZero}, length=${sigBytes.length}, first4=[${sigBytes.slice(0, 4).join(',')}]`);
+      
+      // Ensure signature is exactly 64 bytes
+      if (sigBytes.length !== 64) {
+        console.log(`[Privy] Warning: Signature ${i} has incorrect length ${sigBytes.length}, padding/truncating to 64`);
+        const correctedSig = new Uint8Array(64);
+        correctedSig.set(sigBytes.slice(0, 64));
+        sigBytes = correctedSig;
+      }
       
       // Copy signature bytes to original transaction
       transaction.signatures[i].set(sigBytes);
     }
     
-    // Serialize the modified original transaction
+    // Verify signatures were copied correctly
+    console.log("[Privy] Final transaction signatures:");
+    transaction.signatures.forEach((sig, idx) => {
+      const isZero = sig.every((b: number) => b === 0);
+      console.log(`[Privy] Final sig ${idx}: isZero=${isZero}, first4=[${sig.slice(0, 4).join(',')}]`);
+    });
+    
+    // Serialize the transaction with updated signatures
     const signedTxBuffer = Buffer.from(transaction.serialize());
     
     console.log("[Privy] Signed transaction serialized, length:", signedTxBuffer.length);
