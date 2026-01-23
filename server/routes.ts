@@ -2,7 +2,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { z } from "zod";
-import { Connection, PublicKey } from "@solana/web3.js";
+import { Connection, PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
+import { createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount, getMint } from "@solana/spl-token";
 import { PrivyClient } from "@privy-io/server-auth";
 import { randomBytes } from "crypto";
 import { tweetProvider } from "./services/tweetProvider";
@@ -761,6 +762,161 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[API] Sell trade error:", error);
       res.status(500).json({ error: error.message || "Failed to execute sell" });
+    }
+  });
+
+  // Transfer tokens to another address
+  app.post("/api/transfer", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { tokenMint, recipientAddress, amount } = req.body;
+      
+      if (!user.solanaPubkey || !user.privyWalletId) {
+        return res.status(400).json({ error: "Wallet not configured" });
+      }
+      
+      if (!tokenMint || !recipientAddress || !amount) {
+        return res.status(400).json({ error: "Missing required fields: tokenMint, recipientAddress, amount" });
+      }
+      
+      // Validate amount
+      const amountNum = parseFloat(amount);
+      if (isNaN(amountNum) || amountNum <= 0) {
+        return res.status(400).json({ error: "Invalid amount - must be a positive number" });
+      }
+      
+      // Validate recipient address
+      let recipientPubkey: PublicKey;
+      try {
+        recipientPubkey = new PublicKey(recipientAddress);
+      } catch {
+        return res.status(400).json({ error: "Invalid recipient address" });
+      }
+      
+      // Validate token mint
+      let mintPubkey: PublicKey;
+      try {
+        mintPubkey = new PublicKey(tokenMint);
+      } catch {
+        return res.status(400).json({ error: "Invalid token mint address" });
+      }
+      
+      const senderPubkey = new PublicKey(user.solanaPubkey);
+      
+      // Determine decimals and token program
+      const isUsdc = tokenMint === USDC_MINT;
+      let decimals = isUsdc ? 6 : 9;
+      let tokenProgramId = TOKEN_PROGRAM_ID;
+      
+      // Check if it's a known asset for accurate decimals and program
+      const assets = await storage.getAssetRegistry();
+      const asset = assets.find(a => a.solanaMint === tokenMint);
+      if (asset) {
+        decimals = asset.decimals || 9;
+        // Ondo tokens use Token-2022 program
+        tokenProgramId = TOKEN_2022_PROGRAM_ID;
+      }
+      
+      // USDC uses standard Token program
+      if (isUsdc) {
+        tokenProgramId = TOKEN_PROGRAM_ID;
+      }
+      
+      // Convert amount to raw using BigInt for precision
+      const multiplier = BigInt(10 ** decimals);
+      const [wholePart, fracPart = ""] = amount.split(".");
+      const paddedFrac = fracPart.padEnd(decimals, "0").slice(0, decimals);
+      const rawAmount = BigInt(wholePart || "0") * multiplier + BigInt(paddedFrac || "0");
+      
+      if (rawAmount <= 0n) {
+        return res.status(400).json({ error: "Amount too small" });
+      }
+      
+      // Check balance
+      const tokenBalance = await jupiter.getTokenBalance(connection, user.solanaPubkey, tokenMint);
+      if (BigInt(tokenBalance.balance) < rawAmount) {
+        return res.status(400).json({ error: "Insufficient balance" });
+      }
+      
+      // Get sender's token account (with correct program ID)
+      const senderAta = await getAssociatedTokenAddress(
+        mintPubkey, 
+        senderPubkey, 
+        false,
+        tokenProgramId
+      );
+      
+      // Get or create recipient's token account
+      const recipientAta = await getAssociatedTokenAddress(
+        mintPubkey, 
+        recipientPubkey,
+        false,
+        tokenProgramId
+      );
+      
+      // Build transaction
+      const transaction = new Transaction();
+      
+      // Check if recipient ATA exists, if not add create instruction
+      try {
+        await getAccount(connection, recipientAta, "confirmed", tokenProgramId);
+      } catch {
+        // Account doesn't exist, add create instruction
+        transaction.add(
+          createAssociatedTokenAccountInstruction(
+            senderPubkey,    // payer
+            recipientAta,    // ata address
+            recipientPubkey, // owner
+            mintPubkey,      // mint
+            tokenProgramId   // token program
+          )
+        );
+      }
+      
+      // Add transfer instruction with correct program ID
+      transaction.add(
+        createTransferInstruction(
+          senderAta,
+          recipientAta,
+          senderPubkey,
+          rawAmount,
+          [],
+          tokenProgramId
+        )
+      );
+      
+      // Get recent blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = senderPubkey;
+      
+      // Serialize to base64
+      const txBase64 = transaction.serialize({ requireAllSignatures: false }).toString("base64");
+      
+      // Sign with Privy
+      const signResult = await privyService.signSolanaTransaction(user.privyWalletId, txBase64);
+      
+      if ("error" in signResult) {
+        return res.status(400).json({ error: signResult.error });
+      }
+      
+      // Deserialize and send
+      const signedTx = Transaction.from(Buffer.from(signResult.signedTransaction, "base64"));
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, "confirmed");
+      
+      console.log(`[Transfer] Sent ${amount} tokens to ${recipientAddress}, tx: ${signature}`);
+      
+      res.json({ 
+        success: true, 
+        signature,
+        explorerUrl: `https://solscan.io/tx/${signature}`
+      });
+    } catch (error: any) {
+      console.error("[API] Transfer error:", error);
+      res.status(500).json({ error: error.message || "Failed to transfer tokens" });
     }
   });
 

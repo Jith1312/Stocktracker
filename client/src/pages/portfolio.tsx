@@ -6,6 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   Wallet, 
   TrendingUp, 
@@ -15,7 +19,8 @@ import {
   ArrowDownRight,
   Clock,
   Loader2,
-  DollarSign
+  DollarSign,
+  Send
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
@@ -23,10 +28,16 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useState, useEffect } from "react";
 
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
 export default function Portfolio() {
   const { authenticated, ready } = usePrivy();
   const { toast } = useToast();
   const [sellingTicker, setSellingTicker] = useState<string | null>(null);
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const [transferToken, setTransferToken] = useState<string>(USDC_MINT);
+  const [transferRecipient, setTransferRecipient] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
   
   const isReady = ready && authenticated;
   
@@ -87,13 +98,133 @@ export default function Portfolio() {
     sellMutation.mutate({ ticker, amount: balance });
   };
 
+  const transferMutation = useMutation({
+    mutationFn: async ({ tokenMint, recipientAddress, amount }: { tokenMint: string; recipientAddress: string; amount: string }) => {
+      const res = await apiRequest("POST", "/api/transfer", { tokenMint, recipientAddress, amount });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Transfer successful!",
+        description: `Transaction: ${data.signature?.slice(0, 12)}...`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/portfolio/holdings"] });
+      setTransferDialogOpen(false);
+      setTransferRecipient("");
+      setTransferAmount("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Transfer failed",
+        description: error.message || "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleTransfer = () => {
+    if (!transferRecipient || !transferAmount) {
+      toast({
+        title: "Missing fields",
+        description: "Please enter recipient address and amount",
+        variant: "destructive",
+      });
+      return;
+    }
+    transferMutation.mutate({
+      tokenMint: transferToken,
+      recipientAddress: transferRecipient,
+      amount: transferAmount,
+    });
+  };
+
+  // Get available tokens for transfer (USDC + holdings)
+  const transferableTokens = [
+    { mint: USDC_MINT, symbol: "USDC", balance: usdcBalance },
+    ...(holdings || []).map((h: any) => ({ mint: h.mint, symbol: h.symbol, balance: parseFloat(h.balance) }))
+  ];
 
   return (
     <AppLayout>
       <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold" data-testid="text-portfolio-title">Portfolio</h1>
-          <p className="text-muted-foreground mt-1">View your holdings and trade history</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold" data-testid="text-portfolio-title">Portfolio</h1>
+            <p className="text-muted-foreground mt-1">View your holdings and trade history</p>
+          </div>
+          <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-send-tokens">
+                <Send className="w-4 h-4 mr-2" />
+                Send Tokens
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Send Tokens</DialogTitle>
+                <DialogDescription>
+                  Transfer tokens to another Solana wallet address
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="token">Token</Label>
+                  <Select value={transferToken} onValueChange={setTransferToken}>
+                    <SelectTrigger data-testid="select-transfer-token">
+                      <SelectValue placeholder="Select token" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {transferableTokens.map((token) => (
+                        <SelectItem key={token.mint} value={token.mint} data-testid={`token-option-${token.symbol}`}>
+                          {token.symbol} (Balance: {typeof token.balance === 'number' ? token.balance.toFixed(token.symbol === 'USDC' ? 2 : 6) : token.balance})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="recipient">Recipient Address</Label>
+                  <Input
+                    id="recipient"
+                    placeholder="Enter Solana wallet address"
+                    value={transferRecipient}
+                    onChange={(e) => setTransferRecipient(e.target.value)}
+                    data-testid="input-recipient-address"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="amount">Amount</Label>
+                  <Input
+                    id="amount"
+                    type="number"
+                    placeholder="Enter amount"
+                    value={transferAmount}
+                    onChange={(e) => setTransferAmount(e.target.value)}
+                    data-testid="input-transfer-amount"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setTransferDialogOpen(false)}>
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={handleTransfer} 
+                  disabled={transferMutation.isPending}
+                  data-testid="button-confirm-transfer"
+                >
+                  {transferMutation.isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    "Send"
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
 
         <div className="grid gap-6 md:grid-cols-4">
