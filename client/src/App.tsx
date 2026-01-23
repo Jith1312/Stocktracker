@@ -14,6 +14,7 @@ import Alerts from "@/pages/alerts";
 import Portfolio from "@/pages/portfolio";
 import Admin from "@/pages/admin";
 import TradeConfirm from "@/pages/trade-confirm";
+import Settings from "@/pages/settings";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { authenticated, ready } = usePrivy();
@@ -57,6 +58,9 @@ function Router() {
       </Route>
       <Route path="/trade/confirm">
         {() => <ProtectedRoute component={TradeConfirm} />}
+      </Route>
+      <Route path="/settings">
+        {() => <ProtectedRoute component={Settings} />}
       </Route>
       <Route component={NotFound} />
     </Switch>

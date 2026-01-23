@@ -32,6 +32,7 @@ const navItems = [
   { path: "/influencers", label: "Influencers", icon: Users },
   { path: "/alerts", label: "Alerts", icon: Bell },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },
+  { path: "/settings", label: "Settings", icon: Settings },
 ];
 
 function AppSidebar() {

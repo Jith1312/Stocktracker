@@ -9,6 +9,7 @@ import { tweetProvider } from "./services/tweetProvider";
 import { classifyTweet, shouldCreateAlert } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
+import * as privyService from "./services/privy";
 
 const privy = new PrivyClient(
   process.env.PRIVY_APP_ID!,
@@ -129,6 +130,8 @@ export async function registerRoutes(
         telegramUsername: user.telegramUsername,
         defaultBuyAmountUsd: user.defaultBuyAmountUsd,
         autoExecuteEnabled: user.autoExecuteEnabled,
+        signerEnabled: user.signerEnabled,
+        privyWalletId: user.privyWalletId,
       });
     } catch (error) {
       console.error("[API] Profile error:", error);
@@ -150,6 +153,48 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[API] Update profile error:", error);
       res.status(500).json({ error: "Failed to update profile" });
+    }
+  });
+
+  app.get("/api/user/signer-status", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      res.json({
+        signerEnabled: user.signerEnabled || false,
+        privyWalletId: user.privyWalletId,
+        autoExecuteEnabled: user.autoExecuteEnabled || false,
+      });
+    } catch (error) {
+      console.error("[API] Signer status error:", error);
+      res.status(500).json({ error: "Failed to get signer status" });
+    }
+  });
+
+  app.post("/api/user/enable-signer", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const privyUser = await privy.getUser((req as any).privyUserId);
+      
+      const embeddedWallet = privyUser?.linkedAccounts?.find(
+        (account: any) => account.type === "wallet" && account.walletClientType === "privy"
+      );
+      
+      const walletId = (embeddedWallet as any)?.id || null;
+      
+      await storage.updateUser(user.id, { 
+        signerEnabled: true,
+        privyWalletId: walletId,
+        autoExecuteEnabled: true,
+      });
+      
+      res.json({ 
+        success: true, 
+        signerEnabled: true,
+        privyWalletId: walletId,
+      });
+    } catch (error) {
+      console.error("[API] Enable signer error:", error);
+      res.status(500).json({ error: "Failed to enable signer" });
     }
   });
 
@@ -693,12 +738,6 @@ export async function registerRoutes(
           const chatId = callback_query.message.chat.id.toString();
           const messageId = callback_query.message.message_id;
           
-          await telegram.editMessageText(
-            chatId,
-            messageId,
-            `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...`,
-          );
-          
           try {
             const userAlert = await storage.getUserAlert(parseInt(userAlertId));
             if (!userAlert) throw new Error("Alert not found");
@@ -711,6 +750,25 @@ export async function registerRoutes(
             
             const asset = await storage.getAssetByTicker(alertEvent.ticker);
             if (!asset) throw new Error("Asset not found");
+            
+            const canAutoExecute = user.signerEnabled && 
+                                   user.autoExecuteEnabled && 
+                                   user.privyWalletId &&
+                                   privyService.isAuthorizationKeyConfigured();
+            
+            if (canAutoExecute) {
+              await telegram.editMessageText(
+                chatId,
+                messageId,
+                `${callback_query.message.text}\n\n⚡ Executing ${actionText.toLowerCase()} for $${amount}...`,
+              );
+            } else {
+              await telegram.editMessageText(
+                chatId,
+                messageId,
+                `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...`,
+              );
+            }
             
             const amountUsd = parseFloat(amount);
             const amountRaw = jupiter.usdToRawAmount(amountUsd);
@@ -738,23 +796,55 @@ export async function registerRoutes(
               status: "PENDING",
             });
             
-            const appUrl = process.env.REPLIT_DEV_DOMAIN 
-              ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-              : `${req.protocol}://${req.get("host")}`;
-            
-            await telegram.editMessageText(
-              chatId,
-              messageId,
-              `${callback_query.message.text}\n\n✅ Order prepared!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${appUrl}/trade/execute?orderId=${preparedOrder.id}">Tap to sign & execute</a>`,
-            );
-            
-            await storage.updateUserAlert(parseInt(userAlertId), { status: "PREPARED" });
+            if (canAutoExecute && quote.transaction && user.privyWalletId) {
+              const txResult = await privyService.signAndSendSolanaTransaction(
+                user.privyWalletId,
+                quote.transaction
+              );
+              
+              if ("signature" in txResult) {
+                const trade = await storage.createTrade({
+                  userId: user.id,
+                  userAlertId: parseInt(userAlertId),
+                  preparedOrderId: preparedOrder.id,
+                  txSig: txResult.signature,
+                  inputMint,
+                  outputMint,
+                  amountIn: amountRaw,
+                  status: "COMPLETED",
+                });
+                
+                await storage.updatePreparedOrder(preparedOrder.id, { status: "EXECUTED" });
+                await storage.updateUserAlert(parseInt(userAlertId), { status: "EXECUTED" });
+                
+                const explorerUrl = `https://solscan.io/tx/${txResult.signature}`;
+                await telegram.editMessageText(
+                  chatId,
+                  messageId,
+                  `${callback_query.message.text}\n\n✅ Trade executed!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${explorerUrl}">View on Solscan</a>`,
+                );
+              } else {
+                throw new Error(txResult.error);
+              }
+            } else {
+              const appUrl = process.env.REPLIT_DEV_DOMAIN 
+                ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+                : `${req.protocol}://${req.get("host")}`;
+              
+              await telegram.editMessageText(
+                chatId,
+                messageId,
+                `${callback_query.message.text}\n\n✅ Order prepared!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${appUrl}/trade/execute?orderId=${preparedOrder.id}">Tap to sign & execute</a>`,
+              );
+              
+              await storage.updateUserAlert(parseInt(userAlertId), { status: "PREPARED" });
+            }
           } catch (error: any) {
-            console.error("[Telegram] Trade preparation error:", error);
+            console.error("[Telegram] Trade error:", error);
             await telegram.editMessageText(
               chatId,
               messageId,
-              `${callback_query.message.text}\n\n❌ Failed to prepare trade: ${error.message || "Unknown error"}`,
+              `${callback_query.message.text}\n\n❌ Failed: ${error.message || "Unknown error"}`,
             );
           }
         }
