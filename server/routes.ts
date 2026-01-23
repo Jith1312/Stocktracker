@@ -820,7 +820,8 @@ export async function registerRoutes(
             if (canAutoExecute && quote.transaction && user.privyWalletId) {
               const txResult = await privyService.signAndSendSolanaTransaction(
                 user.privyWalletId,
-                quote.transaction
+                quote.transaction,
+                user.privyId
               );
               
               if ("signature" in txResult) {

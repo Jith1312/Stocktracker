@@ -97,7 +97,8 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
 
 export async function signAndSendSolanaTransaction(
   walletId: string,
-  transactionBase64: string
+  transactionBase64: string,
+  privyDid?: string
 ): Promise<{ signature: string } | { error: string }> {
   try {
     if (!PRIVY_AUTHORIZATION_KEY) {
@@ -105,6 +106,24 @@ export async function signAndSendSolanaTransaction(
     }
     
     console.log("[Privy] Signing transaction for wallet ID:", walletId);
+    
+    // Debug: Check if wallet is delegated
+    if (privyDid) {
+      try {
+        const user = await serverAuthClient.getUser(privyDid);
+        const solanaWallet = user?.linkedAccounts?.find(
+          (a: any) => a.type === "wallet" && a.walletClientType === "privy" && a.chainType === "solana"
+        );
+        console.log("[Privy] Solana wallet delegation status:", {
+          walletId: (solanaWallet as any)?.id,
+          address: (solanaWallet as any)?.address,
+          delegated: (solanaWallet as any)?.delegated,
+          chainType: (solanaWallet as any)?.chainType,
+        });
+      } catch (e) {
+        console.log("[Privy] Could not fetch user for delegation check:", e);
+      }
+    }
     
     // Deserialize the base64 transaction to a VersionedTransaction
     const transactionBuffer = Buffer.from(transactionBase64, "base64");
