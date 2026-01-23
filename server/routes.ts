@@ -1038,5 +1038,76 @@ export async function registerRoutes(
     }
   });
 
+  // Test endpoint to simulate full trade flow (for development only)
+  app.post("/api/dev/test-trade", async (req: Request, res: Response) => {
+    try {
+      const { ticker = "NVDA", amountUsd = 1, useSol = false } = req.body;
+      
+      // Get test user (the one with wallet configured)
+      const user = await storage.getUserByPrivyId("did:privy:cmkqx8qwj01epjo0cecy20hfj");
+      if (!user || !user.solanaPubkey || !user.privyWalletId) {
+        return res.status(400).json({ error: "Test user not found or wallet not configured" });
+      }
+      
+      console.log("[DevTest] Testing trade for", useSol ? "SOL" : ticker, "amount:", amountUsd);
+      console.log("[DevTest] User:", { id: user.id, wallet: user.solanaPubkey, privyWalletId: user.privyWalletId });
+      
+      // Determine output mint
+      let outputMint: string;
+      if (useSol) {
+        outputMint = "So11111111111111111111111111111111111111112"; // Native SOL
+      } else {
+        const asset = await storage.getAssetByTicker(ticker);
+        if (!asset) {
+          return res.status(400).json({ error: `Asset ${ticker} not found` });
+        }
+        outputMint = asset.solanaMint;
+        console.log("[DevTest] Asset:", { ticker, mint: asset.solanaMint });
+      }
+      
+      // Get quote
+      const amountRaw = jupiter.usdToRawAmount(amountUsd);
+      console.log("[DevTest] Getting quote for", amountRaw, "raw units, output:", outputMint);
+      
+      const quote = await jupiter.getQuote(USDC_MINT, outputMint, amountRaw, user.solanaPubkey);
+      console.log("[DevTest] Quote received:", {
+        outAmount: quote.outAmount,
+        requestId: quote.requestId,
+        hasTransaction: !!quote.transaction
+      });
+      
+      if (!quote.transaction || !quote.requestId) {
+        return res.status(400).json({ error: "No transaction in quote", quote });
+      }
+      
+      // Sign transaction
+      console.log("[DevTest] Signing with Privy wallet:", user.privyWalletId);
+      const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
+      
+      if ("error" in signResult) {
+        return res.status(400).json({ error: "Sign failed: " + signResult.error, details: signResult.details });
+      }
+      
+      console.log("[DevTest] Signed successfully");
+      
+      // Execute
+      console.log("[DevTest] Executing with requestId:", quote.requestId);
+      const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
+      
+      console.log("[DevTest] Execute result:", executeResult);
+      
+      res.json({
+        success: executeResult.status === "Success",
+        signature: executeResult.signature,
+        status: executeResult.status,
+        error: executeResult.error,
+        code: executeResult.code
+      });
+    } catch (error: any) {
+      console.error("[DevTest] Error:", error);
+      res.status(500).json({ error: error.message, stack: error.stack });
+    }
+  });
+
   return httpServer;
 }
