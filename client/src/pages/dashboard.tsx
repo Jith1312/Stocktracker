@@ -17,22 +17,46 @@ import {
 } from "lucide-react";
 import { SiTelegram, SiSolana } from "react-icons/si";
 import { Link } from "wouter";
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+interface UserProfile {
+  id: number;
+  email?: string;
+  solanaPubkey?: string;
+  telegramChatId?: string;
+  telegramUsername?: string;
+  defaultBuyAmountUsd?: string;
+  autoExecuteEnabled?: boolean;
+}
+
+interface UserStats {
+  influencerCount: number;
+  alertsToday: number;
+  tradeCount: number;
+}
+
+interface Alert {
+  id: number;
+  ticker: string;
+  action: string;
+  createdAt: string;
+}
 
 export default function Dashboard() {
   const { user, authenticated } = usePrivy();
   const [copied, setCopied] = useState(false);
   const { toast } = useToast();
+  const telegramPollRef = useRef<NodeJS.Timeout | null>(null);
 
-  const { data: profile, isLoading: profileLoading } = useQuery({
+  const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
     queryKey: ["/api/user/profile"],
     enabled: authenticated,
   });
 
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isLoading: statsLoading } = useQuery<UserStats>({
     queryKey: ["/api/user/stats"],
     enabled: authenticated,
   });
@@ -46,7 +70,7 @@ export default function Dashboard() {
     enabled: authenticated,
   });
 
-  const { data: recentAlerts, isLoading: alertsLoading } = useQuery({
+  const { data: recentAlerts, isLoading: alertsLoading } = useQuery<Alert[]>({
     queryKey: ["/api/alerts", "recent"],
   });
 
@@ -60,6 +84,18 @@ export default function Dashboard() {
     }
   };
 
+  // Stop polling when Telegram becomes connected
+  useEffect(() => {
+    if (profile?.telegramChatId && telegramPollRef.current) {
+      clearInterval(telegramPollRef.current);
+      telegramPollRef.current = null;
+      toast({
+        title: "Telegram Connected!",
+        description: "You'll now receive trading alerts in Telegram.",
+      });
+    }
+  }, [profile?.telegramChatId, toast]);
+
   const connectTelegramMutation = useMutation({
     mutationFn: async () => {
       return await apiRequest("GET", "/api/telegram/link");
@@ -71,6 +107,20 @@ export default function Dashboard() {
           title: "Opening Telegram",
           description: "Click 'Start' in the Telegram bot to complete the connection.",
         });
+        // Poll for connection status after opening Telegram
+        let pollCount = 0;
+        const maxPolls = 30; // Poll for up to 60 seconds
+        if (telegramPollRef.current) clearInterval(telegramPollRef.current);
+        telegramPollRef.current = setInterval(() => {
+          pollCount++;
+          if (pollCount >= maxPolls) {
+            if (telegramPollRef.current) clearInterval(telegramPollRef.current);
+            telegramPollRef.current = null;
+            return;
+          }
+          // Invalidate and refetch profile to check for Telegram connection
+          queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
+        }, 2000);
       }
     },
     onError: () => {
