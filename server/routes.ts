@@ -563,22 +563,53 @@ export async function registerRoutes(
 /help - Show this message
 /mute TICKER - Mute alerts for a ticker
 /unmute TICKER - Unmute alerts for a ticker
-/amount NUMBER - Set default buy amount`,
+/amount NUMBER - Set default trade amount (e.g., /amount 50)`,
           parseMode: "HTML",
         });
+      }
+
+      if (message?.text?.startsWith("/amount ")) {
+        const amountStr = message.text.split(" ")[1];
+        const amount = parseFloat(amountStr);
+        
+        if (isNaN(amount) || amount <= 0 || amount > 10000) {
+          await telegram.sendMessage({
+            chatId: message.chat.id.toString(),
+            text: "❌ Please provide a valid amount between $1 and $10,000. Example: /amount 50",
+          });
+        } else {
+          const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
+          if (user) {
+            await storage.updateUser(user.id, { defaultBuyAmountUsd: amount.toString() });
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: `✅ Default trade amount set to $${amount}. Your quick-trade buttons will now show this amount.`,
+            });
+          } else {
+            await telegram.sendMessage({
+              chatId: message.chat.id.toString(),
+              text: "❌ Please connect your account first using the link from the app.",
+            });
+          }
+        }
       }
 
       if (callback_query) {
         await telegram.answerCallbackQuery(callback_query.id);
         
-        const [action, userAlertId, amount] = callback_query.data.split(":");
+        const parts = callback_query.data.split(":");
+        const action = parts[0];
+        const userAlertId = parts[1];
+        const amount = parts[2];
+        const tradeAction = parts[3] || "BUY";
         
         if (action === "trade") {
+          const actionText = tradeAction === "SELL" ? "Sell" : "Buy";
           const appUrl = `${req.protocol}://${req.get("host")}`;
           await telegram.editMessageText(
             callback_query.message.chat.id.toString(),
             callback_query.message.message_id,
-            `${callback_query.message.text}\n\n⏳ Preparing trade for $${amount}...\n\n<a href="${appUrl}/trade/confirm?alertId=${userAlertId}&amount=${amount}">Click here to confirm</a>`,
+            `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...\n\n<a href="${appUrl}/trade/confirm?alertId=${userAlertId}&amount=${amount}&action=${tradeAction}">Click here to confirm</a>`,
           );
         }
         

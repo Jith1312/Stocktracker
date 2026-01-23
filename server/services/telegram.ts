@@ -125,14 +125,24 @@ export function formatAlertMessage(
 <a href="${tweetUrl}">View Tweet</a>`;
 }
 
-export function createTradeButtons(userAlertId: number, appUrl: string): InlineKeyboardButton[][] {
+export function createTradeButtons(
+  userAlertId: number, 
+  appUrl: string, 
+  action: "BUY" | "SELL" = "BUY",
+  defaultAmount: number = 10
+): InlineKeyboardButton[][] {
+  const actionEmoji = action === "BUY" ? "💰" : "💸";
+  const actionText = action === "BUY" ? "Buy" : "Sell";
+  
+  const amounts = [defaultAmount, defaultAmount * 2.5];
+  
   return [
     [
-      { text: "💰 Buy $10", callback_data: `trade:${userAlertId}:10` },
-      { text: "💰 Buy $25", callback_data: `trade:${userAlertId}:25` },
+      { text: `${actionEmoji} ${actionText} $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:${action}` },
+      { text: `${actionEmoji} ${actionText} $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:${action}` },
     ],
     [
-      { text: "💰 Custom", url: `${appUrl}/trade/confirm?alertId=${userAlertId}` },
+      { text: `${actionEmoji} Custom`, url: `${appUrl}/trade/confirm?alertId=${userAlertId}&action=${action}` },
       { text: "❌ Ignore", callback_data: `ignore:${userAlertId}` },
     ],
   ];

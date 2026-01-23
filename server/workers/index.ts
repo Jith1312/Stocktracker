@@ -145,7 +145,13 @@ async function sendAlertsForEvent(
         tweet.url
       );
 
-      const buttons = telegram.createTradeButtons(userAlert.id, APP_URL);
+      const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
+      const buttons = telegram.createTradeButtons(
+        userAlert.id, 
+        APP_URL, 
+        ticker.action as "BUY" | "SELL",
+        defaultAmount
+      );
 
       const sentMessage = await telegram.sendMessage({
         chatId: user.telegramChatId,
