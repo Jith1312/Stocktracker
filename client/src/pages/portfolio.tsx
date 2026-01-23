@@ -467,6 +467,7 @@ export default function Portfolio() {
           <TabsList>
             <TabsTrigger value="holdings" data-testid="tab-holdings">Holdings</TabsTrigger>
             <TabsTrigger value="history" data-testid="tab-history">Trade History</TabsTrigger>
+            <TabsTrigger value="transactions" data-testid="tab-transactions">Transactions</TabsTrigger>
           </TabsList>
 
           <TabsContent value="holdings" className="mt-6">
@@ -549,6 +550,85 @@ export default function Portfolio() {
           </TabsContent>
 
           <TabsContent value="history" className="mt-6">
+            {tradesLoading ? (
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="space-y-4">
+                    {[1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-16 w-full" />
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : trades && trades.length > 0 ? (
+              <Card>
+                <CardContent className="pt-6">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Type</TableHead>
+                        <TableHead>Sold</TableHead>
+                        <TableHead>Received</TableHead>
+                        <TableHead className="text-right">Status</TableHead>
+                        <TableHead className="text-right">Time</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {trades.map((trade: any) => (
+                        <TableRow key={trade.id} data-testid={`trade-row-${trade.id}`}>
+                          <TableCell>
+                            <div className={`flex items-center gap-2 ${trade.isBuy ? "text-green-500" : "text-red-500"}`}>
+                              {trade.isBuy ? (
+                                <ArrowUpRight className="w-4 h-4" />
+                              ) : (
+                                <ArrowDownRight className="w-4 h-4" />
+                              )}
+                              <span className="font-medium">{trade.isBuy ? "Buy" : "Sell"}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium">{trade.inputTicker}</div>
+                            <div className="text-sm text-muted-foreground font-mono">
+                              {trade.inputAmountDisplay}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium">{trade.outputTicker}</div>
+                            <div className="text-sm text-muted-foreground font-mono">
+                              {trade.outputAmountDisplay || "—"}
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Badge 
+                              variant={trade.status === "COMPLETED" ? "default" : 
+                                      trade.status === "PENDING" ? "secondary" : "destructive"}
+                            >
+                              {trade.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right text-muted-foreground">
+                            {formatDistanceToNow(new Date(trade.createdAt), { addSuffix: true })}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="py-16 text-center">
+                  <Clock className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
+                  <h3 className="text-xl font-semibold mb-2">No trades yet</h3>
+                  <p className="text-muted-foreground">
+                    Your trade history will appear here
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="transactions" className="mt-6">
             {(tradesLoading || transfersLoading) ? (
               <Card>
                 <CardContent className="pt-6">
@@ -560,46 +640,39 @@ export default function Portfolio() {
                 </CardContent>
               </Card>
             ) : (() => {
-              // Combine trades and transfers into unified history
-              const tradeItems = (trades || []).map((t: any) => ({
-                type: "trade" as const,
-                id: `trade-${t.id}`,
-                actionType: t.isBuy ? "Buy" : "Sell",
-                symbol: t.isBuy ? t.outputTicker : t.inputTicker,
-                amount: t.isBuy ? t.outputAmountDisplay : t.inputAmountDisplay,
-                status: t.status,
-                createdAt: new Date(t.createdAt),
-                txSig: t.txSig,
-                isBuy: t.isBuy,
-              }));
+              const allTransactions = [
+                ...(trades || []).map((t: any) => ({
+                  type: "trade" as const,
+                  id: `trade-${t.id}`,
+                  action: t.isBuy ? "Buy" : "Sell",
+                  details: `${t.inputAmountDisplay} ${t.inputTicker} → ${t.outputAmountDisplay || "..."} ${t.outputTicker}`,
+                  status: t.status,
+                  createdAt: new Date(t.createdAt),
+                  txSig: t.txSig,
+                  isPositive: t.isBuy,
+                })),
+                ...(transfersData || []).map((t: any) => ({
+                  type: "transfer" as const,
+                  id: `transfer-${t.id}`,
+                  action: t.direction === "outgoing" ? "Sent" : "Received",
+                  details: t.direction === "outgoing" 
+                    ? `${t.amountDisplay} ${t.symbol} to ${t.toAddress.slice(0, 6)}...${t.toAddress.slice(-4)}`
+                    : `${t.amountDisplay} ${t.symbol} from ${t.fromAddress.slice(0, 6)}...${t.fromAddress.slice(-4)}`,
+                  status: "COMPLETED",
+                  createdAt: new Date(t.createdAt),
+                  txSig: t.txSig,
+                  isPositive: t.direction === "incoming",
+                })),
+              ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
               
-              const transferItems = (transfersData || []).map((t: any) => ({
-                type: "transfer" as const,
-                id: `transfer-${t.id}`,
-                actionType: t.direction === "outgoing" ? "Sent" : "Received",
-                symbol: t.symbol,
-                amount: t.amountDisplay,
-                address: t.direction === "outgoing" 
-                  ? `${t.toAddress.slice(0, 4)}...${t.toAddress.slice(-4)}`
-                  : `${t.fromAddress.slice(0, 4)}...${t.fromAddress.slice(-4)}`,
-                status: "COMPLETED",
-                createdAt: new Date(t.createdAt),
-                txSig: t.txSig,
-                isOutgoing: t.direction === "outgoing",
-              }));
-              
-              const allHistory = [...tradeItems, ...transferItems].sort(
-                (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-              );
-              
-              if (allHistory.length === 0) {
+              if (allTransactions.length === 0) {
                 return (
                   <Card>
                     <CardContent className="py-16 text-center">
                       <Clock className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
                       <h3 className="text-xl font-semibold mb-2">No transactions yet</h3>
                       <p className="text-muted-foreground">
-                        Your trade and transfer history will appear here
+                        All trades and transfers will appear here
                       </p>
                     </CardContent>
                   </Card>
@@ -613,57 +686,53 @@ export default function Portfolio() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Type</TableHead>
-                          <TableHead>Asset</TableHead>
-                          <TableHead>Amount</TableHead>
+                          <TableHead>Details</TableHead>
                           <TableHead className="text-right">Status</TableHead>
                           <TableHead className="text-right">Time</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {allHistory.map((item) => {
-                          const isTrade = item.type === "trade";
-                          const isPositive = isTrade ? item.isBuy : !item.isOutgoing;
-                          
-                          return (
-                            <TableRow key={item.id} data-testid={`history-row-${item.id}`}>
-                              <TableCell>
-                                <div className={`flex items-center gap-2 ${isPositive ? "text-green-500" : "text-red-500"}`}>
-                                  {isPositive ? (
-                                    <ArrowUpRight className="w-4 h-4" />
-                                  ) : (
-                                    <ArrowDownRight className="w-4 h-4" />
-                                  )}
-                                  <span className="font-medium">{item.actionType}</span>
-                                </div>
-                                <Badge variant="outline" className="mt-1 text-xs">
-                                  {isTrade ? "Trade" : "Transfer"}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                <div className="font-medium">{item.symbol}</div>
-                                {!isTrade && item.address && (
-                                  <div className="text-xs text-muted-foreground">
-                                    {item.isOutgoing ? "To: " : "From: "}{item.address}
-                                  </div>
+                        {allTransactions.map((tx) => (
+                          <TableRow key={tx.id} data-testid={`tx-row-${tx.id}`}>
+                            <TableCell>
+                              <div className={`flex items-center gap-2 ${tx.isPositive ? "text-green-500" : "text-red-500"}`}>
+                                {tx.isPositive ? (
+                                  <ArrowUpRight className="w-4 h-4" />
+                                ) : (
+                                  <ArrowDownRight className="w-4 h-4" />
                                 )}
-                              </TableCell>
-                              <TableCell className="font-mono">
-                                {item.amount || "—"}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <Badge 
-                                  variant={item.status === "COMPLETED" ? "default" : 
-                                          item.status === "PENDING" ? "secondary" : "destructive"}
+                                <span className="font-medium">{tx.action}</span>
+                              </div>
+                              <Badge variant="outline" className="mt-1 text-xs">
+                                {tx.type === "trade" ? "Trade" : "Transfer"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="font-mono text-sm">{tx.details}</div>
+                              {tx.txSig && (
+                                <a 
+                                  href={`https://solscan.io/tx/${tx.txSig}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary hover:underline"
                                 >
-                                  {item.status}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-right text-muted-foreground">
-                                {formatDistanceToNow(item.createdAt, { addSuffix: true })}
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
+                                  View on Solscan
+                                </a>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Badge 
+                                variant={tx.status === "COMPLETED" ? "default" : 
+                                        tx.status === "PENDING" ? "secondary" : "destructive"}
+                              >
+                                {tx.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right text-muted-foreground">
+                              {formatDistanceToNow(tx.createdAt, { addSuffix: true })}
+                            </TableCell>
+                          </TableRow>
+                        ))}
                       </TableBody>
                     </Table>
                   </CardContent>
