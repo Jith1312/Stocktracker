@@ -1,5 +1,5 @@
-import { PrivyClient as ServerAuthClient } from "@privy-io/server-auth";
-import { PrivyClient, isEmbeddedWalletLinkedAccount } from "@privy-io/node";
+import { PrivyClient } from "@privy-io/server-auth";
+import { VersionedTransaction } from "@solana/web3.js";
 import crypto from "crypto";
 
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID!;
@@ -10,26 +10,20 @@ if (!PRIVY_APP_ID || !PRIVY_APP_SECRET) {
   console.warn("[Privy] Missing PRIVY_APP_ID or PRIVY_APP_SECRET");
 }
 
-const serverAuthClient = new ServerAuthClient(PRIVY_APP_ID, PRIVY_APP_SECRET);
-
-let privyNodeClient: PrivyClient | null = null;
-
-function getPrivyNodeClient(): PrivyClient {
-  if (!privyNodeClient) {
-    const config: any = {
-      appId: PRIVY_APP_ID,
-      appSecret: PRIVY_APP_SECRET,
-    };
-    
-    if (PRIVY_AUTHORIZATION_KEY) {
-      config.authorizationPrivateKey = PRIVY_AUTHORIZATION_KEY;
-      console.log("[Privy] Initialized with authorization key for delegated actions");
-    }
-    
-    privyNodeClient = new PrivyClient(config);
-  }
-  return privyNodeClient;
+// Create server auth client with optional walletApi config for delegated actions
+const serverAuthClientOptions: any = {};
+if (PRIVY_AUTHORIZATION_KEY) {
+  serverAuthClientOptions.walletApi = {
+    authorizationPrivateKey: PRIVY_AUTHORIZATION_KEY,
+  };
+  console.log("[Privy] Initialized with authorization key for delegated actions");
 }
+
+const serverAuthClient = new PrivyClient(
+  PRIVY_APP_ID, 
+  PRIVY_APP_SECRET,
+  serverAuthClientOptions
+);
 
 export async function verifyToken(token: string) {
   try {
@@ -51,16 +45,6 @@ export async function getUser(privyDid: string) {
   }
 }
 
-export async function getUserWithNode(privyDid: string) {
-  try {
-    const privy = getPrivyNodeClient();
-    const user = await privy.users().get({ idType: "did", id: privyDid });
-    return user;
-  } catch (error) {
-    console.error("[Privy] Failed to get user with node client:", error);
-    return null;
-  }
-}
 
 export async function getEmbeddedWalletId(privyDid: string): Promise<string | null> {
   try {
@@ -73,10 +57,9 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
     }
     
     // Log the user data structure for debugging
-    console.log("[Privy] User linked_accounts:", JSON.stringify(user.linked_accounts || user.linkedAccounts, null, 2));
+    console.log("[Privy] User linkedAccounts:", JSON.stringify(user.linkedAccounts, null, 2));
     
-    // Try both property names (linked_accounts and linkedAccounts)
-    const accounts = user.linked_accounts || (user as any).linkedAccounts || [];
+    const accounts = user.linkedAccounts || [];
     
     if (!accounts || accounts.length === 0) {
       console.log("[Privy] No linked accounts found for user");
@@ -113,7 +96,7 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
 }
 
 export async function signAndSendSolanaTransaction(
-  walletId: string,
+  walletAddress: string,
   transactionBase64: string
 ): Promise<{ signature: string } | { error: string }> {
   try {
@@ -121,17 +104,21 @@ export async function signAndSendSolanaTransaction(
       return { error: "Server-side signing not configured. Missing authorization key." };
     }
     
-    const privy = getPrivyNodeClient();
+    console.log("[Privy] Signing transaction for wallet address:", walletAddress);
     
-    console.log("[Privy] Signing transaction for wallet ID:", walletId);
+    // Decode the base64 transaction to a VersionedTransaction
+    const transactionBuffer = Buffer.from(transactionBase64, "base64");
+    const transaction = VersionedTransaction.deserialize(transactionBuffer);
     
-    // Use the dedicated Solana signAndSendTransaction method
-    const response = await privy.wallets().solana().signAndSendTransaction(walletId, {
-      transaction: transactionBase64,
+    // Use walletApi.solana.signAndSendTransaction from server-auth
+    const response = await serverAuthClient.walletApi.solana.signAndSendTransaction({
+      address: walletAddress,
+      chainType: "solana",
+      transaction: transaction,
     });
     
     console.log("[Privy] Transaction sent successfully:", response);
-    return { signature: response.transaction_hash || response.transactionHash || (response as any).hash };
+    return { signature: response.hash };
   } catch (error: any) {
     console.error("[Privy] Failed to sign and send transaction:", error);
     return { error: error.message || "Failed to execute transaction" };
@@ -139,7 +126,7 @@ export async function signAndSendSolanaTransaction(
 }
 
 export async function signSolanaTransaction(
-  walletId: string,
+  walletAddress: string,
   transactionBase64: string
 ): Promise<{ signedTransaction: string } | { error: string }> {
   try {
@@ -147,14 +134,22 @@ export async function signSolanaTransaction(
       return { error: "Server-side signing not configured. Missing authorization key." };
     }
     
-    const privy = getPrivyNodeClient();
+    console.log("[Privy] Signing transaction for wallet address:", walletAddress);
     
-    // The SDK expects just the transaction string (base64 encoded)
-    const result = await privy.wallets().solana().signTransaction(walletId, {
-      transaction: transactionBase64,
+    // Decode the base64 transaction to a VersionedTransaction
+    const transactionBuffer = Buffer.from(transactionBase64, "base64");
+    const transaction = VersionedTransaction.deserialize(transactionBuffer);
+    
+    // Use walletApi.solana.signTransaction from server-auth
+    const response = await serverAuthClient.walletApi.solana.signTransaction({
+      address: walletAddress,
+      chainType: "solana",
+      transaction: transaction,
     });
     
-    return { signedTransaction: result.signedTransaction };
+    // Convert the signed transaction back to base64
+    const signedTxBuffer = Buffer.from(response.signedTransaction.serialize());
+    return { signedTransaction: signedTxBuffer.toString("base64") };
   } catch (error: any) {
     console.error("[Privy] Failed to sign transaction:", error);
     return { error: error.message || "Failed to sign transaction" };
@@ -169,4 +164,4 @@ export function getKeyQuorumId(): string | null {
   return process.env.PRIVY_KEY_QUORUM_ID || null;
 }
 
-export { serverAuthClient, getPrivyNodeClient };
+export { serverAuthClient };

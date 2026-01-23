@@ -817,9 +817,9 @@ export async function registerRoutes(
               status: "PENDING",
             });
             
-            if (canAutoExecute && quote.transaction && user.privyWalletId) {
+            if (canAutoExecute && quote.transaction && user.solanaPubkey) {
               const txResult = await privyService.signAndSendSolanaTransaction(
-                user.privyWalletId,
+                user.solanaPubkey,
                 quote.transaction
               );
               
