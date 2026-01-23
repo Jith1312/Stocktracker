@@ -44,7 +44,19 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
     try {
       const privyUser = await privy.getUser(verifiedClaims.userId);
       const email = privyUser?.email?.address || null;
-      const solanaPubkey = privyUser?.wallet?.address || null;
+      
+      // Get Solana wallet - check linked accounts for embedded Solana wallet
+      let solanaPubkey: string | null = null;
+      if (privyUser?.linkedAccounts) {
+        const solanaWallet = privyUser.linkedAccounts.find(
+          (account: any) => account.type === 'wallet' && account.chainType === 'solana'
+        );
+        solanaPubkey = solanaWallet?.address || null;
+      }
+      // Fallback to legacy wallet field
+      if (!solanaPubkey && privyUser?.wallet?.address) {
+        solanaPubkey = privyUser.wallet.address;
+      }
       
       if (!user) {
         try {
