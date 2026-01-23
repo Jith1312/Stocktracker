@@ -1172,6 +1172,7 @@ export async function registerRoutes(
               const maxTradeAttempts = 3;
               let lastError: string = "Unknown error";
               let signature: string | null = null;
+              let outputAmountResult: string | null = null;
               
               for (let attempt = 1; attempt <= maxTradeAttempts; attempt++) {
                 console.log(`[Trade] Attempt ${attempt}/${maxTradeAttempts}`);
@@ -1207,6 +1208,7 @@ export async function registerRoutes(
                   
                   if (executeResult.status === "Success" || executeResult.signature) {
                     signature = executeResult.signature || "";
+                    outputAmountResult = executeResult.outputAmountResult || null;
                     break; // Success!
                   }
                   
@@ -1236,6 +1238,7 @@ export async function registerRoutes(
                   inputMint,
                   outputMint,
                   amountIn: amountRaw,
+                  amountOut: outputAmountResult,
                   status: "COMPLETED",
                 });
                 
