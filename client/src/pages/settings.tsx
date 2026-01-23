@@ -95,6 +95,12 @@ export default function Settings() {
     }
   }, [profile?.defaultBuyAmountUsd]);
 
+  useEffect(() => {
+    console.log("[Settings] Profile data:", profile);
+    console.log("[Settings] Signer config:", signerConfig);
+    console.log("[Settings] hasSessionSigner:", hasSessionSigner);
+  }, [profile, signerConfig, hasSessionSigner]);
+
   const updateProfileMutation = useMutation({
     mutationFn: async (data: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean }) => {
       return await apiRequest("PATCH", "/api/user/profile", data);
