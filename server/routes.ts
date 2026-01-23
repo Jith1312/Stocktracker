@@ -824,20 +824,33 @@ export async function registerRoutes(
               status: "PENDING",
             });
             
-            if (canAutoExecute && quote.transaction && user.privyWalletId) {
-              // Sign and broadcast directly to Solana via Privy (v6 API path)
-              const txResult = await privyService.signAndSendSolanaTransaction(
+            if (canAutoExecute && quote.transaction && user.privyWalletId && quote.requestId) {
+              // Ultra API flow: Sign transaction, then submit to Jupiter /execute
+              const signResult = await privyService.signSolanaTransaction(
                 user.privyWalletId,
-                quote.transaction,
-                user.privyId
+                quote.transaction
               );
               
-              if ("signature" in txResult) {
+              if ("error" in signResult) {
+                throw new Error(signResult.error);
+              }
+              
+              // Submit to Jupiter Ultra /execute endpoint
+              const executeResult = await jupiter.executeUltraOrder(
+                quote.requestId,
+                signResult.signedTransaction
+              );
+              
+              console.log("[Trade] Jupiter execute result:", executeResult);
+              
+              if (executeResult.status === "Success" || executeResult.signature) {
+                const signature = executeResult.signature || "";
+                
                 const trade = await storage.createTrade({
                   userId: user.id,
                   userAlertId: parseInt(userAlertId),
                   preparedOrderId: preparedOrder.id,
-                  txSig: txResult.signature,
+                  txSig: signature,
                   inputMint,
                   outputMint,
                   amountIn: amountRaw,
@@ -847,14 +860,14 @@ export async function registerRoutes(
                 await storage.updatePreparedOrder(preparedOrder.id, { status: "EXECUTED" });
                 await storage.updateUserAlert(parseInt(userAlertId), { status: "EXECUTED" });
                 
-                const explorerUrl = `https://solscan.io/tx/${txResult.signature}`;
+                const explorerUrl = `https://solscan.io/tx/${signature}`;
                 await telegram.editMessageText(
                   chatId,
                   messageId,
                   `${callback_query.message.text}\n\n✅ Trade executed!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${explorerUrl}">View on Solscan</a>`,
                 );
               } else {
-                throw new Error(txResult.error);
+                throw new Error(executeResult.error || "Trade execution failed");
               }
             } else {
               const appUrl = process.env.REPLIT_DEV_DOMAIN 
