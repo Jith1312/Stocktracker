@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { usePrivy } from "@privy-io/react-auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,15 +23,18 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useState } from "react";
 
 export default function Portfolio() {
+  const { authenticated } = usePrivy();
   const { toast } = useToast();
   const [sellingTicker, setSellingTicker] = useState<string | null>(null);
   
   const { data: holdings, isLoading: holdingsLoading } = useQuery({
     queryKey: ["/api/portfolio/holdings"],
+    enabled: authenticated,
   });
 
   const { data: trades, isLoading: tradesLoading } = useQuery({
     queryKey: ["/api/trades"],
+    enabled: authenticated,
   });
 
   const sellMutation = useMutation({
