@@ -268,7 +268,7 @@ export async function registerRoutes(
       const tweets = await storage.getTweetsByInfluencer(id, 100);
       
       // Get all Ondo tickers for filtering
-      const assets = await storage.getAllAssets();
+      const assets = await storage.getAssetRegistry();
       const ondoTickers = new Set(assets.map(a => a.underlyingTicker.toUpperCase()));
       
       const enriched = await Promise.all(tweets.map(async (tweet) => {
