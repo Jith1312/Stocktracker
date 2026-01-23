@@ -1,6 +1,9 @@
 import { Connection, VersionedTransaction, PublicKey } from "@solana/web3.js";
 
-const JUPITER_API_URL = "https://lite-api.jup.ag";
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
+const JUPITER_API_URL = JUPITER_API_KEY 
+  ? "https://api.jup.ag" 
+  : "https://lite-api.jup.ag";
 
 export interface QuoteResponse {
   inputMint: string;
@@ -35,7 +38,12 @@ export async function getQuote(
   url.searchParams.set("slippageBps", slippageBps.toString());
   url.searchParams.set("swapMode", "ExactIn");
 
-  const response = await fetch(url.toString());
+  const headers: Record<string, string> = {};
+  if (JUPITER_API_KEY) {
+    headers["x-api-key"] = JUPITER_API_KEY;
+  }
+
+  const response = await fetch(url.toString(), { headers });
   if (!response.ok) {
     const error = await response.text();
     throw new Error(`Jupiter quote error: ${error}`);
@@ -48,11 +56,16 @@ export async function getSwapTransaction(
   quoteResponse: QuoteResponse,
   userPublicKey: string
 ): Promise<SwapResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (JUPITER_API_KEY) {
+    headers["x-api-key"] = JUPITER_API_KEY;
+  }
+
   const response = await fetch(`${JUPITER_API_URL}/swap/v1/swap`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       quoteResponse,
       userPublicKey,
