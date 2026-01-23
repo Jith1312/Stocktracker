@@ -173,10 +173,23 @@ export async function signSolanaTransaction(
     } as any);
     
     console.log("[Privy] Sign response received");
+    console.log("[Privy] Response type:", typeof response.signedTransaction);
+    console.log("[Privy] Response keys:", Object.keys(response.signedTransaction || {}));
     
     // The response.signedTransaction is a VersionedTransaction object
     // We need to serialize it back to base64
     const signedTx = response.signedTransaction as VersionedTransaction;
+    
+    // Debug: Check signatures
+    if (signedTx && (signedTx as any).signatures) {
+      const sigs = (signedTx as any).signatures;
+      console.log("[Privy] Signatures count:", sigs.length);
+      if (sigs[0]) {
+        const firstSig = sigs[0];
+        const isZero = firstSig.every ? firstSig.every((b: number) => b === 0) : false;
+        console.log("[Privy] First signature is zero:", isZero);
+      }
+    }
     
     // Check if it's already a VersionedTransaction with serialize method
     let signedTxBuffer: Buffer;
