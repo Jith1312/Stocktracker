@@ -212,6 +212,13 @@ async function sendAlertsForEvent(
 }
 
 async function setupTelegramWebhook() {
+  // Only setup webhook in production to avoid dev overwriting production webhook
+  const isProduction = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
+  if (!isProduction) {
+    console.log("[Telegram] Development mode, skipping webhook setup to avoid overwriting production");
+    return;
+  }
+  
   const domain = getAppDomain();
   if (domain === "localhost:5000") {
     console.log("[Telegram] No domain configured, skipping webhook setup");
