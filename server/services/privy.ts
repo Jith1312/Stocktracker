@@ -155,23 +155,32 @@ export async function signSolanaTransaction(
     }
     
     console.log("[Privy] Signing transaction for wallet ID:", walletId);
+    console.log("[Privy] Transaction base64 length:", transactionBase64.length);
     
     // Deserialize the base64 transaction to a VersionedTransaction
     const transactionBuffer = Buffer.from(transactionBase64, "base64");
+    console.log("[Privy] Transaction buffer length:", transactionBuffer.length);
+    
     const transaction = VersionedTransaction.deserialize(transactionBuffer);
+    console.log("[Privy] Transaction deserialized successfully");
     
     // Use walletApi.solana.signTransaction with walletId and caip2
+    console.log("[Privy] Calling walletApi.solana.signTransaction...");
     const response = await serverAuthClient.walletApi.solana.signTransaction({
       walletId: walletId,
       caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", // Solana mainnet
       transaction: transaction,
     } as any);
     
+    console.log("[Privy] Sign response received:", JSON.stringify(response, null, 2));
+    
     // Serialize the signed transaction back to base64
     const signedTxBuffer = Buffer.from(response.signedTransaction.serialize());
+    console.log("[Privy] Signed transaction serialized, length:", signedTxBuffer.length);
     return { signedTransaction: signedTxBuffer.toString("base64") };
   } catch (error: any) {
     console.error("[Privy] Failed to sign transaction:", error);
+    console.error("[Privy] Error details:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
     return { error: error.message || "Failed to sign transaction" };
   }
 }
