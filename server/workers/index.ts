@@ -3,7 +3,12 @@ import { storage } from "../storage";
 import { tweetProvider } from "../services/tweetProvider";
 import { classifyTweet, shouldCreateAlert } from "../services/classifier";
 import * as telegram from "../services/telegram";
+import * as jupiter from "../services/jupiter";
+import { Connection } from "@solana/web3.js";
 import type { ClassificationResult } from "@shared/schema";
+
+const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
+const connection = new Connection(SOLANA_RPC_URL);
 
 const APP_URL = process.env.REPLIT_DEV_DOMAIN 
   ? `https://${process.env.REPLIT_DEV_DOMAIN}`
@@ -82,7 +87,7 @@ async function classifyTweetsWorker() {
 
         if (await shouldCreateAlert(result)) {
           for (const ticker of result.tickers) {
-            const tickerSymbol = ticker.ticker || ticker.symbol;
+            const tickerSymbol = ticker.symbol;
             const asset = await storage.getAssetByTicker(tickerSymbol);
             if (!asset?.isActive) continue;
 
@@ -152,15 +157,31 @@ async function sendAlertsForEvent(
         ticker.action,
         ticker.confidence,
         tweet.text,
-        tweet.url
+        tweet.url,
+        tweet.tweetCreatedAt || tweet.ingestedAt
       );
 
       const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
+      
+      let userHoldsStock = false;
+      if (user.solanaPubkey) {
+        try {
+          const asset = await storage.getAssetByTicker(ticker.symbol);
+          if (asset) {
+            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+            userHoldsStock = parseFloat(jupiter.rawAmountToDisplay(balance.balance, balance.decimals)) > 0;
+          }
+        } catch (e) {
+          console.log(`[Worker] Error checking holdings for ${ticker.symbol}:`, e);
+        }
+      }
+      
       const buttons = telegram.createTradeButtons(
         userAlert.id, 
         APP_URL, 
         ticker.action as "BUY" | "SELL",
-        defaultAmount
+        defaultAmount,
+        userHoldsStock
       );
 
       const sentMessage = await telegram.sendMessage({

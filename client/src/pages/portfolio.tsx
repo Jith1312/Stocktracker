@@ -467,7 +467,6 @@ export default function Portfolio() {
           <TabsList>
             <TabsTrigger value="holdings" data-testid="tab-holdings">Holdings</TabsTrigger>
             <TabsTrigger value="history" data-testid="tab-history">Trade History</TabsTrigger>
-            <TabsTrigger value="transactions" data-testid="tab-transactions">Transactions</TabsTrigger>
           </TabsList>
 
           <TabsContent value="holdings" className="mt-6">
@@ -571,6 +570,7 @@ export default function Portfolio() {
                         <TableHead>Received</TableHead>
                         <TableHead className="text-right">Status</TableHead>
                         <TableHead className="text-right">Time</TableHead>
+                        <TableHead className="text-right">Txn Link</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -609,6 +609,20 @@ export default function Portfolio() {
                           <TableCell className="text-right text-muted-foreground">
                             {formatDistanceToNow(new Date(trade.createdAt), { addSuffix: true })}
                           </TableCell>
+                          <TableCell className="text-right">
+                            {trade.txSig && (
+                              <a 
+                                href={`https://solscan.io/tx/${trade.txSig}`} 
+                                target="_blank" 
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline inline-flex items-center gap-1"
+                                data-testid={`link-tx-${trade.id}`}
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                View
+                              </a>
+                            )}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -626,119 +640,6 @@ export default function Portfolio() {
                 </CardContent>
               </Card>
             )}
-          </TabsContent>
-
-          <TabsContent value="transactions" className="mt-6">
-            {(tradesLoading || transfersLoading) ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            ) : (() => {
-              const allTransactions = [
-                ...(trades || []).map((t: any) => ({
-                  type: "trade" as const,
-                  id: `trade-${t.id}`,
-                  action: t.isBuy ? "Buy" : "Sell",
-                  details: `${t.inputAmountDisplay} ${t.inputTicker} → ${t.outputAmountDisplay || "..."} ${t.outputTicker}`,
-                  status: t.status,
-                  createdAt: new Date(t.createdAt),
-                  txSig: t.txSig,
-                  isPositive: t.isBuy,
-                })),
-                ...(transfersData || []).map((t: any) => ({
-                  type: "transfer" as const,
-                  id: `transfer-${t.id}`,
-                  action: t.direction === "outgoing" ? "Sent" : "Received",
-                  details: t.direction === "outgoing" 
-                    ? `${t.amountDisplay} ${t.symbol} to ${t.toAddress.slice(0, 6)}...${t.toAddress.slice(-4)}`
-                    : `${t.amountDisplay} ${t.symbol} from ${t.fromAddress.slice(0, 6)}...${t.fromAddress.slice(-4)}`,
-                  status: "COMPLETED",
-                  createdAt: new Date(t.createdAt),
-                  txSig: t.txSig,
-                  isPositive: t.direction === "incoming",
-                })),
-              ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-              
-              if (allTransactions.length === 0) {
-                return (
-                  <Card>
-                    <CardContent className="py-16 text-center">
-                      <Clock className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                      <h3 className="text-xl font-semibold mb-2">No transactions yet</h3>
-                      <p className="text-muted-foreground">
-                        All trades and transfers will appear here
-                      </p>
-                    </CardContent>
-                  </Card>
-                );
-              }
-              
-              return (
-                <Card>
-                  <CardContent className="pt-6">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Type</TableHead>
-                          <TableHead>Details</TableHead>
-                          <TableHead className="text-right">Status</TableHead>
-                          <TableHead className="text-right">Time</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {allTransactions.map((tx) => (
-                          <TableRow key={tx.id} data-testid={`tx-row-${tx.id}`}>
-                            <TableCell>
-                              <div className={`flex items-center gap-2 ${tx.isPositive ? "text-green-500" : "text-red-500"}`}>
-                                {tx.isPositive ? (
-                                  <ArrowUpRight className="w-4 h-4" />
-                                ) : (
-                                  <ArrowDownRight className="w-4 h-4" />
-                                )}
-                                <span className="font-medium">{tx.action}</span>
-                              </div>
-                              <Badge variant="outline" className="mt-1 text-xs">
-                                {tx.type === "trade" ? "Trade" : "Transfer"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="font-mono text-sm">{tx.details}</div>
-                              {tx.txSig && (
-                                <a 
-                                  href={`https://solscan.io/tx/${tx.txSig}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-primary hover:underline"
-                                >
-                                  View on Solscan
-                                </a>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Badge 
-                                variant={tx.status === "COMPLETED" ? "default" : 
-                                        tx.status === "PENDING" ? "secondary" : "destructive"}
-                              >
-                                {tx.status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right text-muted-foreground">
-                              {formatDistanceToNow(tx.createdAt, { addSuffix: true })}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </CardContent>
-                </Card>
-              );
-            })()}
           </TabsContent>
         </Tabs>
       </div>

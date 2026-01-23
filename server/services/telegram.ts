@@ -110,11 +110,22 @@ export function formatAlertMessage(
   action: string,
   confidence: number,
   tweetExcerpt: string,
-  tweetUrl: string
+  tweetUrl: string,
+  tweetDate?: Date
 ): string {
+  const dateStr = tweetDate 
+    ? tweetDate.toLocaleString("en-US", { 
+        month: "short", 
+        day: "numeric", 
+        hour: "numeric", 
+        minute: "2-digit",
+        hour12: true 
+      })
+    : "";
+  
   return `📢 <b>$${ticker} Mentioned!</b>
 
-👤 From: @${influencerHandle}
+👤 From: @${influencerHandle}${dateStr ? ` • ${dateStr}` : ""}
 
 "${tweetExcerpt.slice(0, 250)}${tweetExcerpt.length > 250 ? "..." : ""}"
 
@@ -125,24 +136,30 @@ export function createTradeButtons(
   userAlertId: number, 
   appUrl: string, 
   action: "BUY" | "SELL" = "BUY",
-  defaultAmount: number = 10
+  defaultAmount: number = 10,
+  userHoldsStock: boolean = false
 ): InlineKeyboardButton[][] {
   const amounts = [defaultAmount, defaultAmount * 2.5];
   
-  return [
+  const buttons: InlineKeyboardButton[][] = [
     [
       { text: `🟢 Buy $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:BUY` },
       { text: `🟢 Buy $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:BUY` },
     ],
-    [
-      { text: `🔴 Sell $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:SELL` },
-      { text: `🔴 Sell $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:SELL` },
-    ],
-    [
-      { text: "📱 Open App", url: `${appUrl}/trade/confirm?alertId=${userAlertId}` },
-      { text: "❌ Ignore", callback_data: `ignore:${userAlertId}` },
-    ],
   ];
+  
+  if (userHoldsStock) {
+    buttons.push([
+      { text: `🔴 Sell All`, callback_data: `trade:${userAlertId}:ALL:SELL` },
+    ]);
+  }
+  
+  buttons.push([
+    { text: "📱 Open App", url: `${appUrl}/trade/confirm?alertId=${userAlertId}` },
+    { text: "❌ Ignore", callback_data: `ignore:${userAlertId}` },
+  ]);
+  
+  return buttons;
 }
 
 export async function setWebhook(webhookUrl: string): Promise<boolean> {

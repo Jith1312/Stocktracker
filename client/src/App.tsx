@@ -1,6 +1,6 @@
 import { Switch, Route, Redirect } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrivyProviderWrapper } from "@/lib/privy";
@@ -15,11 +15,21 @@ import Portfolio from "@/pages/portfolio";
 import Admin from "@/pages/admin";
 import TradeConfirm from "@/pages/trade-confirm";
 import Settings from "@/pages/settings";
+import Onboarding from "@/pages/onboarding";
 
-function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
+interface UserProfile {
+  onboardingCompleted?: boolean;
+}
+
+function ProtectedRoute({ component: Component, skipOnboardingCheck = false }: { component: React.ComponentType; skipOnboardingCheck?: boolean }) {
   const { authenticated, ready } = usePrivy();
+  
+  const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
+    queryKey: ["/api/user/profile"],
+    enabled: authenticated && ready && !skipOnboardingCheck,
+  });
 
-  if (!ready) {
+  if (!ready || (authenticated && !skipOnboardingCheck && profileLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="animate-pulse text-muted-foreground">Loading...</div>
@@ -29,6 +39,10 @@ function ProtectedRoute({ component: Component }: { component: React.ComponentTy
 
   if (!authenticated) {
     return <Redirect to="/" />;
+  }
+
+  if (!skipOnboardingCheck && profile && !profile.onboardingCompleted) {
+    return <Redirect to="/onboarding" />;
   }
 
   return <Component />;
@@ -61,6 +75,9 @@ function Router() {
       </Route>
       <Route path="/settings">
         {() => <ProtectedRoute component={Settings} />}
+      </Route>
+      <Route path="/onboarding">
+        {() => <ProtectedRoute component={Onboarding} skipOnboardingCheck />}
       </Route>
       <Route component={NotFound} />
     </Switch>

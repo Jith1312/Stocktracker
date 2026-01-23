@@ -138,6 +138,7 @@ export async function registerRoutes(
         autoExecuteEnabled: user.autoExecuteEnabled,
         signerEnabled: user.signerEnabled,
         privyWalletId: user.privyWalletId,
+        onboardingCompleted: user.onboardingCompleted,
       });
     } catch (error) {
       console.error("[API] Profile error:", error);
@@ -148,9 +149,9 @@ export async function registerRoutes(
   app.patch("/api/user/profile", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { defaultBuyAmountUsd, autoExecuteEnabled } = req.body;
+      const { defaultBuyAmountUsd, autoExecuteEnabled, onboardingCompleted } = req.body;
       
-      const updateData: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean } = {};
+      const updateData: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean; onboardingCompleted?: boolean } = {};
       
       if (defaultBuyAmountUsd !== undefined) {
         const amount = parseFloat(defaultBuyAmountUsd);
@@ -167,6 +168,14 @@ export async function registerRoutes(
           return;
         }
         updateData.autoExecuteEnabled = autoExecuteEnabled;
+      }
+      
+      if (onboardingCompleted !== undefined) {
+        if (typeof onboardingCompleted !== 'boolean') {
+          res.status(400).json({ error: "Invalid onboardingCompleted value" });
+          return;
+        }
+        updateData.onboardingCompleted = onboardingCompleted;
       }
       
       const updated = await storage.updateUser(user.id, updateData);
@@ -1078,26 +1087,18 @@ export async function registerRoutes(
 /help - Show this message
 /balance - Show your wallet balance
 /portfolio - Show your holdings and trade history
-/sell TICKER - Sell all of a token back to USDC (e.g., /sell NVDA)
+/sell - Sell stock tokens (shows selection menu)
 /mute TICKER - Mute alerts for a ticker
 /unmute TICKER - Unmute alerts for a ticker
-/amount NUMBER - Set default trade amount (e.g., /amount 50)`,
+/amount NUMBER - Set default buy amount (e.g., /amount 50)`,
           parseMode: "HTML",
         });
       }
       
-      // Handle /sell command
-      if (message?.text?.startsWith("/sell ")) {
-        const ticker = message.text.split(" ")[1]?.toUpperCase();
+      // Handle /sell command - show stock selection menu or sell specific ticker
+      if (message?.text === "/sell" || message?.text?.startsWith("/sell ")) {
         const chatId = message.chat.id.toString();
-        
-        if (!ticker) {
-          await telegram.sendMessage({
-            chatId,
-            text: "❌ Please specify a ticker. Example: /sell NVDA",
-          });
-          return res.sendStatus(200);
-        }
+        const ticker = message.text.split(" ")[1]?.toUpperCase();
         
         const user = await storage.getUserByTelegramChatId(chatId);
         if (!user || !user.solanaPubkey || !user.privyWalletId) {
@@ -1106,6 +1107,73 @@ export async function registerRoutes(
             text: "❌ Wallet not configured. Please set up one-tap trading in the app first.",
           });
           return res.sendStatus(200);
+        }
+        
+        // If no ticker specified, show stock selection menu
+        if (!ticker) {
+          try {
+            const pubkey = new PublicKey(user.solanaPubkey);
+            const assets = await storage.getAssetRegistry();
+            const assetsByMint = new Map(assets.map(a => [a.solanaMint, a]));
+            const holdings: { ticker: string; balance: string; mint: string }[] = [];
+            
+            const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+            const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+            
+            const processAccounts = (accounts: any[]) => {
+              for (const { account } of accounts) {
+                const info = account.data.parsed.info;
+                const mint = info.mint;
+                const asset = assetsByMint.get(mint);
+                
+                if (asset && asset.underlyingTicker !== "USDC" && parseFloat(info.tokenAmount.uiAmountString) > 0) {
+                  holdings.push({
+                    ticker: asset.underlyingTicker,
+                    balance: parseFloat(info.tokenAmount.uiAmountString).toFixed(6),
+                    mint: mint
+                  });
+                }
+              }
+            };
+            
+            try {
+              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM });
+              processAccounts(tokenAccounts.value);
+            } catch (e) {}
+            
+            try {
+              const token2022Accounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_2022_PROGRAM });
+              processAccounts(token2022Accounts.value);
+            } catch (e) {}
+            
+            if (holdings.length === 0) {
+              await telegram.sendMessage({
+                chatId,
+                text: "📊 You don't have any stock tokens to sell.\n\nBuy some first by responding to an alert!",
+              });
+              return res.sendStatus(200);
+            }
+            
+            const buttons = holdings.map(h => ([
+              { text: `${h.ticker} (${h.balance})`, callback_data: `sell_stock:${h.ticker}` }
+            ]));
+            buttons.push([{ text: "❌ Cancel", callback_data: "sell_cancel" }]);
+            
+            await telegram.sendMessage({
+              chatId,
+              text: "📈 <b>Select a stock to sell:</b>\n\nTap a stock below to sell your entire position.",
+              parseMode: "HTML",
+              replyMarkup: { inline_keyboard: buttons },
+            });
+            return res.sendStatus(200);
+          } catch (err: any) {
+            console.error("[Telegram] Error fetching holdings:", err);
+            await telegram.sendMessage({
+              chatId,
+              text: "❌ Error fetching your holdings. Please try again.",
+            });
+            return res.sendStatus(200);
+          }
         }
         
         const asset = await storage.getAssetByTicker(ticker);
@@ -1289,9 +1357,25 @@ export async function registerRoutes(
             if (message?.text === "/portfolio") {
               if (recentTrades.length > 0) {
                 portfolioText += `\n\n📈 <b>Recent Trades</b>`;
+                const allAssets = await storage.getAssetRegistry();
+                const assetByMint = new Map(allAssets.map(a => [a.solanaMint, a]));
+                
                 for (const trade of recentTrades) {
-                  const date = new Date(trade.executedAt!).toLocaleDateString();
-                  portfolioText += `\n• ${trade.side} $${trade.amountUsd} → ${trade.outputMint?.slice(0, 6)}... (${date})`;
+                  const date = new Date(trade.createdAt!).toLocaleDateString();
+                  const inputAsset = assetByMint.get(trade.inputMint);
+                  const outputAsset = assetByMint.get(trade.outputMint);
+                  
+                  const inputSymbol = inputAsset?.underlyingTicker || (trade.inputMint === USDC_MINT ? "USDC" : trade.inputMint?.slice(0, 6) + "...");
+                  const outputSymbol = outputAsset?.underlyingTicker || (trade.outputMint === USDC_MINT ? "USDC" : trade.outputMint?.slice(0, 6) + "...");
+                  
+                  const inputAmount = trade.inputMint === USDC_MINT 
+                    ? `$${jupiter.rawAmountToDisplay(trade.amountIn || "0", 6)}`
+                    : jupiter.rawAmountToDisplay(trade.amountIn || "0", 9);
+                  const outputAmount = trade.outputMint === USDC_MINT 
+                    ? `$${jupiter.rawAmountToDisplay(trade.amountOut || "0", 6)}`
+                    : jupiter.rawAmountToDisplay(trade.amountOut || "0", 9);
+                  
+                  portfolioText += `\n• ${inputAmount} ${inputSymbol} → ${outputAmount} ${outputSymbol} (${date})`;
                 }
               } else {
                 portfolioText += `\n\n📈 <b>Recent Trades</b>\nNo trades yet.`;
@@ -1534,6 +1618,87 @@ export async function registerRoutes(
             callback_query.message.chat.id.toString(),
             callback_query.message.message_id,
             `${callback_query.message.text}\n\n❌ Alert ignored`,
+          );
+        }
+        
+        if (action === "sell_stock") {
+          const ticker = userAlertId; // In this case, parts[1] is the ticker
+          const chatId = callback_query.message.chat.id.toString();
+          const messageId = callback_query.message.message_id;
+          
+          const user = await storage.getUserByTelegramChatId(chatId);
+          if (!user || !user.solanaPubkey || !user.privyWalletId) {
+            await telegram.editMessageText(chatId, messageId, "❌ Wallet not configured.");
+            return res.sendStatus(200);
+          }
+          
+          const asset = await storage.getAssetByTicker(ticker);
+          if (!asset) {
+            await telegram.editMessageText(chatId, messageId, `❌ Unknown ticker: ${ticker}`);
+            return res.sendStatus(200);
+          }
+          
+          await telegram.editMessageText(chatId, messageId, `⏳ Selling your ${ticker} position...`);
+          
+          try {
+            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+            const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
+            
+            if (parseFloat(displayBalance) === 0) {
+              await telegram.editMessageText(chatId, messageId, `❌ You don't have any ${ticker} tokens to sell.`);
+              return res.sendStatus(200);
+            }
+            
+            const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, balance.balance, user.solanaPubkey);
+            
+            if (!quote.transaction || !quote.requestId) {
+              await telegram.editMessageText(chatId, messageId, `❌ Failed to get quote. Market may be unavailable.`);
+              return res.sendStatus(200);
+            }
+            
+            const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
+            
+            if ("error" in signResult) {
+              await telegram.editMessageText(chatId, messageId, `❌ Signing failed: ${signResult.error}`);
+              return res.sendStatus(200);
+            }
+            
+            const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
+            
+            if (executeResult.status === "Success" && executeResult.signature) {
+              const outputAmount = jupiter.rawAmountToDisplay(executeResult.outputAmountResult || "0", 6);
+              
+              await storage.createTrade({
+                userId: user.id,
+                userAlertId: null,
+                preparedOrderId: null,
+                txSig: executeResult.signature,
+                inputMint: asset.solanaMint,
+                outputMint: USDC_MINT,
+                amountIn: balance.balance,
+                amountOut: executeResult.outputAmountResult,
+                status: "COMPLETED",
+              });
+              
+              await telegram.editMessageText(
+                chatId, 
+                messageId, 
+                `✅ <b>Sold ${displayBalance} ${ticker}!</b>\n\nReceived: $${outputAmount} USDC\n\n<a href="https://solscan.io/tx/${executeResult.signature}">View on Solscan</a>`
+              );
+            } else {
+              await telegram.editMessageText(chatId, messageId, `❌ Trade failed: ${executeResult.error || "Unknown error"}`);
+            }
+          } catch (err: any) {
+            console.error("[Telegram] Sell callback error:", err);
+            await telegram.editMessageText(chatId, messageId, `❌ Error: ${err.message || "Unknown error"}`);
+          }
+        }
+        
+        if (action === "sell_cancel") {
+          await telegram.editMessageText(
+            callback_query.message.chat.id.toString(),
+            callback_query.message.message_id,
+            "❌ Sell cancelled."
           );
         }
       }

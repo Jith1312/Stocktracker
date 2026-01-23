@@ -15,6 +15,7 @@ export const users = pgTable("users", {
   telegramUsername: text("telegram_username"),
   defaultBuyAmountUsd: decimal("default_buy_amount_usd", { precision: 10, scale: 2 }).default("10"),
   autoExecuteEnabled: boolean("auto_execute_enabled").default(false),
+  onboardingCompleted: boolean("onboarding_completed").default(false),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
