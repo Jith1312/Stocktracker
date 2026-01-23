@@ -50,13 +50,28 @@ export default function Settings() {
   const [defaultAmount, setDefaultAmount] = useState("10");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
   
-  // Find the embedded Privy wallet
-  const embeddedWallet = wallets.find(w => w.walletClientType === "privy");
+  // Find the embedded Privy Solana wallet from useWallets hook
+  const embeddedWalletFromHook = wallets.find(w => 
+    w.walletClientType === "privy" && 
+    (w as any).chainType === "solana"
+  ) || wallets.find(w => w.walletClientType === "privy");
+  
+  // Also check user.linkedAccounts for embedded Solana wallet as fallback
+  const embeddedWalletFromUser = user?.linkedAccounts?.find(
+    (account: any) => account.type === "wallet" && 
+                       account.walletClientType === "privy" && 
+                       account.chainType === "solana"
+  );
+  
+  // Use either source - prefer the hook for address access
+  const embeddedWallet = embeddedWalletFromHook || embeddedWalletFromUser;
+  const embeddedWalletAddress = embeddedWalletFromHook?.address || (embeddedWalletFromUser as any)?.address;
   
   // Check if wallet is already delegated
   const isWalletDelegated = user?.linkedAccounts?.some(
     (account: any) => account.type === "wallet" && 
                        account.walletClientType === "privy" && 
+                       account.chainType === "solana" &&
                        account.delegated === true
   );
 
@@ -119,10 +134,10 @@ export default function Settings() {
     setIsAddingSigner(true);
     try {
       // Step 1: Delegate the wallet (client-side) if not already delegated
-      if (!isWalletDelegated) {
-        console.log("[Settings] Delegating wallet:", embeddedWallet.address);
+      if (!isWalletDelegated && embeddedWalletAddress) {
+        console.log("[Settings] Delegating wallet:", embeddedWalletAddress);
         await delegateWallet({
-          address: embeddedWallet.address,
+          address: embeddedWalletAddress,
           chainType: "solana",
         });
         console.log("[Settings] Wallet delegated successfully");
