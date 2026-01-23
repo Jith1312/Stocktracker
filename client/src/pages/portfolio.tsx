@@ -20,22 +20,34 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export default function Portfolio() {
-  const { authenticated } = usePrivy();
+  const { authenticated, ready } = usePrivy();
   const { toast } = useToast();
   const [sellingTicker, setSellingTicker] = useState<string | null>(null);
   
-  const { data: holdings, isLoading: holdingsLoading } = useQuery({
+  const isReady = ready && authenticated;
+  
+  const { data: holdings, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<any[]>({
     queryKey: ["/api/portfolio/holdings"],
-    enabled: authenticated,
+    enabled: isReady,
+    staleTime: 0,
   });
 
-  const { data: trades, isLoading: tradesLoading } = useQuery({
+  const { data: trades, isLoading: tradesLoading, refetch: refetchTrades } = useQuery<any[]>({
     queryKey: ["/api/trades"],
-    enabled: authenticated,
+    enabled: isReady,
+    staleTime: 0,
   });
+  
+  // Refetch when auth becomes ready
+  useEffect(() => {
+    if (isReady) {
+      refetchHoldings();
+      refetchTrades();
+    }
+  }, [isReady]);
 
   const sellMutation = useMutation({
     mutationFn: async ({ ticker, amount }: { ticker: string; amount: string }) => {
