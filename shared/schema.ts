@@ -9,6 +9,8 @@ export const users = pgTable("users", {
   privyId: text("privy_id").notNull().unique(),
   email: text("email"),
   solanaPubkey: text("solana_pubkey"),
+  privyWalletId: text("privy_wallet_id"),
+  signerEnabled: boolean("signer_enabled").default(false),
   telegramChatId: text("telegram_chat_id"),
   telegramUsername: text("telegram_username"),
   defaultBuyAmountUsd: decimal("default_buy_amount_usd", { precision: 10, scale: 2 }).default("10"),
