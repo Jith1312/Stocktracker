@@ -2,6 +2,25 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { startWorkers } from "./workers";
+
+function checkRequiredEnv() {
+  const required = ['PRIVY_APP_ID', 'PRIVY_APP_SECRET', 'DATABASE_URL'];
+  const optional = ['TELEGRAM_BOT_TOKEN', 'SOLANA_RPC_URL', 'X_API_BEARER_TOKEN'];
+  
+  const missing = required.filter(key => !process.env[key]);
+  if (missing.length > 0) {
+    console.warn(`[Startup] WARNING: Missing required environment variables: ${missing.join(', ')}`);
+    console.warn('[Startup] Some features may not work correctly.');
+  }
+  
+  const missingOptional = optional.filter(key => !process.env[key]);
+  if (missingOptional.length > 0) {
+    console.log(`[Startup] Note: Optional env vars not set: ${missingOptional.join(', ')}`);
+  }
+}
+
+checkRequiredEnv();
 
 const app = express();
 const httpServer = createServer(app);
@@ -98,6 +117,7 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      startWorkers();
     },
   );
 })();
