@@ -565,10 +565,8 @@ export default function Portfolio() {
                 type: "trade" as const,
                 id: `trade-${t.id}`,
                 actionType: t.isBuy ? "Buy" : "Sell",
-                fromLabel: t.inputTicker,
-                fromAmount: t.inputAmountDisplay,
-                toLabel: t.outputTicker,
-                toAmount: t.outputAmountDisplay,
+                symbol: t.isBuy ? t.outputTicker : t.inputTicker,
+                amount: t.isBuy ? t.outputAmountDisplay : t.inputAmountDisplay,
                 status: t.status,
                 createdAt: new Date(t.createdAt),
                 txSig: t.txSig,
@@ -579,10 +577,11 @@ export default function Portfolio() {
                 type: "transfer" as const,
                 id: `transfer-${t.id}`,
                 actionType: t.direction === "outgoing" ? "Sent" : "Received",
-                fromLabel: t.direction === "outgoing" ? t.symbol : `${t.fromAddress.slice(0, 4)}...${t.fromAddress.slice(-4)}`,
-                fromAmount: t.direction === "outgoing" ? t.amountDisplay : undefined,
-                toLabel: t.direction === "outgoing" ? `${t.toAddress.slice(0, 4)}...${t.toAddress.slice(-4)}` : t.symbol,
-                toAmount: t.direction === "incoming" ? t.amountDisplay : undefined,
+                symbol: t.symbol,
+                amount: t.amountDisplay,
+                address: t.direction === "outgoing" 
+                  ? `${t.toAddress.slice(0, 4)}...${t.toAddress.slice(-4)}`
+                  : `${t.fromAddress.slice(0, 4)}...${t.fromAddress.slice(-4)}`,
                 status: "COMPLETED",
                 createdAt: new Date(t.createdAt),
                 txSig: t.txSig,
@@ -614,8 +613,8 @@ export default function Portfolio() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Type</TableHead>
-                          <TableHead>From</TableHead>
-                          <TableHead>To</TableHead>
+                          <TableHead>Asset</TableHead>
+                          <TableHead>Amount</TableHead>
                           <TableHead className="text-right">Status</TableHead>
                           <TableHead className="text-right">Time</TableHead>
                         </TableRow>
@@ -634,29 +633,22 @@ export default function Portfolio() {
                                   ) : (
                                     <ArrowDownRight className="w-4 h-4" />
                                   )}
-                                  <div>
-                                    <span className="font-medium">{item.actionType}</span>
-                                    {!isTrade && (
-                                      <Badge variant="outline" className="ml-2 text-xs">Transfer</Badge>
-                                    )}
-                                  </div>
+                                  <span className="font-medium">{item.actionType}</span>
                                 </div>
+                                <Badge variant="outline" className="mt-1 text-xs">
+                                  {isTrade ? "Trade" : "Transfer"}
+                                </Badge>
                               </TableCell>
                               <TableCell>
-                                <div className="font-medium">{item.fromLabel}</div>
-                                {item.fromAmount && (
-                                  <div className="text-sm text-muted-foreground font-mono">
-                                    {item.fromAmount}
+                                <div className="font-medium">{item.symbol}</div>
+                                {!isTrade && item.address && (
+                                  <div className="text-xs text-muted-foreground">
+                                    {item.isOutgoing ? "To: " : "From: "}{item.address}
                                   </div>
                                 )}
                               </TableCell>
-                              <TableCell>
-                                <div className="font-medium">{item.toLabel}</div>
-                                {item.toAmount && (
-                                  <div className="text-sm text-muted-foreground font-mono">
-                                    {item.toAmount}
-                                  </div>
-                                )}
+                              <TableCell className="font-mono">
+                                {item.amount || "—"}
                               </TableCell>
                               <TableCell className="text-right">
                                 <Badge 
