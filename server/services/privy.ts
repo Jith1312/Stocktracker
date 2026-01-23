@@ -64,13 +64,31 @@ export async function getUserWithNode(privyDid: string) {
 
 export async function getEmbeddedWalletId(privyDid: string): Promise<string | null> {
   try {
-    const privy = getPrivyNodeClient();
-    const user = await privy.users().get({ idType: "did", id: privyDid });
+    // Use server-auth client which authenticates via app secret
+    const user = await serverAuthClient.getUser(privyDid);
     
     if (!user) return null;
     
-    const embeddedWallet = user.linked_accounts.find(isEmbeddedWalletLinkedAccount);
-    return embeddedWallet?.id || null;
+    // Find the embedded Solana wallet
+    const embeddedWallet = user.linked_accounts.find(
+      (account: any) => account.type === "wallet" && 
+                        account.wallet_client_type === "privy" &&
+                        account.chain_type === "solana"
+    );
+    
+    // The wallet ID for Privy embedded wallets is typically the address
+    // For the Wallet API, we need the wallet's ID field
+    if (embeddedWallet && 'id' in embeddedWallet) {
+      return (embeddedWallet as any).id;
+    }
+    
+    // Fallback: try to get wallet ID from address
+    if (embeddedWallet && 'address' in embeddedWallet) {
+      // For Privy Wallet API, the wallet can be referenced by address
+      return (embeddedWallet as any).address;
+    }
+    
+    return null;
   } catch (error) {
     console.error("[Privy] Failed to get embedded wallet ID:", error);
     return null;
