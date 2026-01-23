@@ -1,6 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { usePrivy, useDelegatedActions } from "@privy-io/react-auth";
-import { useSolanaWallets } from "@privy-io/react-auth/solana";
+import { usePrivy, useDelegatedActions, useWallets } from "@privy-io/react-auth";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -45,7 +44,7 @@ interface SignerStatus {
 
 export default function Settings() {
   const { user, authenticated } = usePrivy();
-  const { wallets } = useSolanaWallets();
+  const { wallets } = useWallets();
   const { delegateWallet } = useDelegatedActions();
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
@@ -343,7 +342,7 @@ export default function Settings() {
                   </p>
                 </div>
                 
-                {hasEmbeddedWallet && (
+                {embeddedWallet && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Check className="w-4 h-4 text-primary" />
                     <span>Using Privy embedded wallet</span>
