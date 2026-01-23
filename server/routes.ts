@@ -448,10 +448,10 @@ export async function registerRoutes(
       const assets = await storage.getAssetRegistry();
       const activeAssets = assets.filter(a => a.isActive);
       
-      const holdings = await Promise.all(activeAssets.map(async (asset) => {
+      // First, get all balances
+      const holdingsWithBalance = await Promise.all(activeAssets.map(async (asset) => {
         try {
           const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-          // Use on-chain decimals instead of database (more accurate)
           const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
           
           if (parseFloat(displayBalance) === 0) return null;
@@ -461,14 +461,36 @@ export async function registerRoutes(
             symbol: asset.ondoSymbol,
             underlyingTicker: asset.underlyingTicker,
             balance: displayBalance,
-            usdValue: null,
+            balanceNum: parseFloat(displayBalance),
           };
         } catch (e) {
           return null;
         }
       }));
       
-      res.json(holdings.filter(Boolean));
+      const validHoldings = holdingsWithBalance.filter(Boolean) as Array<{
+        mint: string;
+        symbol: string;
+        underlyingTicker: string;
+        balance: string;
+        balanceNum: number;
+      }>;
+      
+      // Fetch prices for all held tokens
+      const mints = validHoldings.map(h => h.mint);
+      const prices = await jupiter.getTokenPrices(mints);
+      
+      // Add USD values
+      const holdingsWithValue = validHoldings.map(h => ({
+        mint: h.mint,
+        symbol: h.symbol,
+        underlyingTicker: h.underlyingTicker,
+        balance: h.balance,
+        usdValue: prices[h.mint] ? h.balanceNum * prices[h.mint] : null,
+        price: prices[h.mint] || null,
+      }));
+      
+      res.json(holdingsWithValue);
     } catch (error) {
       console.error("[API] Holdings error:", error);
       res.status(500).json({ error: "Failed to get holdings" });

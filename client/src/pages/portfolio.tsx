@@ -78,7 +78,9 @@ export default function Portfolio() {
     sellMutation.mutate({ ticker, amount: balance });
   };
 
-  const totalValue = holdings?.reduce((acc: number, h: any) => acc + (h.usdValue || 0), 0) || 0;
+  const totalValue = Array.isArray(holdings) 
+    ? holdings.reduce((acc: number, h: any) => acc + (h.usdValue || 0), 0) 
+    : 0;
 
   return (
     <AppLayout>
@@ -195,8 +197,13 @@ export default function Portfolio() {
                           <TableCell className="text-right font-mono">
                             {holding.balance}
                           </TableCell>
-                          <TableCell className="text-right font-mono">
-                            ${holding.usdValue?.toFixed(2) || "—"}
+                          <TableCell className="text-right">
+                            <div className="font-mono">${holding.usdValue?.toFixed(2) || "—"}</div>
+                            {holding.price && (
+                              <div className="text-xs text-muted-foreground">
+                                @${holding.price.toFixed(2)}/token
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-right">
                             <Button 

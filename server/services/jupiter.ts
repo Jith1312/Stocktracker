@@ -329,3 +329,37 @@ export async function getTokenBalance(
     return { balance: "0", decimals: 6 };
   }
 }
+
+export async function getTokenPrices(mints: string[]): Promise<Record<string, number>> {
+  try {
+    if (mints.length === 0) return {};
+    
+    const mintList = mints.join(",");
+    const response = await fetch(`https://api.jup.ag/price/v2?ids=${mintList}`, {
+      headers: {
+        ...(JUPITER_API_KEY ? { "x-api-key": JUPITER_API_KEY } : {}),
+      },
+    });
+    
+    if (!response.ok) {
+      console.error("[Jupiter] Price API error:", response.status);
+      return {};
+    }
+    
+    const data = await response.json();
+    const prices: Record<string, number> = {};
+    
+    for (const [mint, info] of Object.entries(data.data || {})) {
+      const priceInfo = info as any;
+      if (priceInfo?.price) {
+        prices[mint] = parseFloat(priceInfo.price);
+      }
+    }
+    
+    console.log("[Jupiter] Fetched prices for", Object.keys(prices).length, "tokens");
+    return prices;
+  } catch (error) {
+    console.error("[Jupiter] Error fetching prices:", error);
+    return {};
+  }
+}
