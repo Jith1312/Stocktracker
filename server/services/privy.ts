@@ -176,13 +176,28 @@ export async function signSolanaTransaction(
     console.log("[Privy] Response type:", typeof response.signedTransaction);
     console.log("[Privy] Response keys:", Object.keys(response.signedTransaction || {}));
     
-    // The response.signedTransaction is a VersionedTransaction object
-    // We need to serialize it back to base64
-    const signedTx = response.signedTransaction as VersionedTransaction;
+    // The response.signedTransaction is a VersionedTransaction-like object
+    const signedTx = response.signedTransaction as any;
+    
+    // Debug: Check the response structure
+    console.log("[Privy] SignedTx type:", typeof signedTx);
+    console.log("[Privy] SignedTx constructor:", signedTx?.constructor?.name);
+    
+    // Check if it's already a VersionedTransaction we can serialize directly
+    if (signedTx && typeof signedTx.serialize === 'function') {
+      console.log("[Privy] Using signedTx.serialize() directly");
+      const directBuffer = signedTx.serialize();
+      const directBase64 = Buffer.from(directBuffer).toString("base64");
+      console.log("[Privy] Direct serialization length:", directBase64.length);
+      return { signedTransaction: directBase64 };
+    }
+    
+    // Otherwise, reconstruct from signatures and message
+    console.log("[Privy] Reconstructing transaction from response components...");
     
     // Debug: Check all signatures
-    if (signedTx && (signedTx as any).signatures) {
-      const sigs = (signedTx as any).signatures;
+    if (signedTx && signedTx.signatures) {
+      const sigs = signedTx.signatures;
       console.log("[Privy] Signatures count:", sigs.length);
       sigs.forEach((sig: any, idx: number) => {
         const sigArray = sig instanceof Uint8Array ? sig : Object.values(sig);
@@ -203,7 +218,7 @@ export async function signSolanaTransaction(
     console.log("[Privy] Copying signatures from response to original transaction...");
     
     // Extract signatures from the response
-    const responseSignatures = (signedTx as any).signatures;
+    const responseSignatures = signedTx.signatures;
     
     for (let i = 0; i < responseSignatures.length; i++) {
       const sig = responseSignatures[i];
