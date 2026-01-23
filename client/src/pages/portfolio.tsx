@@ -508,6 +508,7 @@ export default function Portfolio() {
                       <TableRow>
                         <TableHead>Asset</TableHead>
                         <TableHead className="text-right">Balance</TableHead>
+                        <TableHead className="text-right">Price</TableHead>
                         <TableHead className="text-right">USD Value</TableHead>
                         <TableHead className="text-right">P&L</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
@@ -536,13 +537,11 @@ export default function Portfolio() {
                             <TableCell className="text-right font-mono">
                               {holding.balance}
                             </TableCell>
-                            <TableCell className="text-right">
-                              <div className="font-mono">${holding.usdValue?.toFixed(2) || "—"}</div>
-                              {holding.price && (
-                                <div className="text-xs text-muted-foreground">
-                                  @${holding.price.toFixed(2)}/token
-                                </div>
-                              )}
+                            <TableCell className="text-right font-mono">
+                              {holding.price ? `$${holding.price.toFixed(2)}` : "—"}
+                            </TableCell>
+                            <TableCell className="text-right font-mono">
+                              {holding.usdValue ? `$${holding.usdValue.toFixed(2)}` : "—"}
                             </TableCell>
                             <TableCell className="text-right">
                               {hasData ? (
