@@ -128,6 +128,8 @@ export interface V6SwapResponse {
   prioritizationFeeLamports: number;
 }
 
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
+
 export async function getQuoteV6(
   inputMint: string,
   outputMint: string,
@@ -140,7 +142,13 @@ export async function getQuoteV6(
   url.searchParams.set("slippageBps", "100"); // 1% slippage
 
   console.log("[Jupiter] Getting v6 quote:", url.toString());
-  const response = await fetch(url.toString());
+  
+  const headers: Record<string, string> = {};
+  if (JUPITER_API_KEY) {
+    headers["x-api-key"] = JUPITER_API_KEY;
+  }
+  
+  const response = await fetch(url.toString(), { headers });
   const data = await response.json();
   
   console.log("[Jupiter] V6 quote raw response:", JSON.stringify(data).substring(0, 500));
@@ -159,9 +167,14 @@ export async function getSwapTransactionV6(
 ): Promise<V6SwapResponse> {
   console.log("[Jupiter] Getting v6 swap transaction for user:", userPublicKey);
   
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (JUPITER_API_KEY) {
+    headers["x-api-key"] = JUPITER_API_KEY;
+  }
+  
   const response = await fetch("https://api.jup.ag/swap/v1/swap", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       quoteResponse,
       userPublicKey,
