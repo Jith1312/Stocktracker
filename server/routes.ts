@@ -439,6 +439,20 @@ export async function registerRoutes(
         mintToAsset[asset.solanaMint] = asset;
       }
       
+      // Calculate prices from sell trades (token -> USDC)
+      const tradePrices: Record<string, number> = {};
+      for (const trade of trades) {
+        if (trade.outputMint === USDC_MINT && trade.amountIn && trade.amountOut) {
+          const inputAsset = mintToAsset[trade.inputMint || ""];
+          const inputDecimals = inputAsset?.decimals || 9;
+          const tokenAmount = parseFloat(trade.amountIn) / Math.pow(10, inputDecimals);
+          const usdcAmount = parseFloat(trade.amountOut) / Math.pow(10, 6);
+          if (tokenAmount > 0) {
+            tradePrices[trade.inputMint!] = usdcAmount / tokenAmount;
+          }
+        }
+      }
+      
       // Enrich trades with token info
       const enrichedTrades = trades.map(trade => {
         const inputAsset = mintToAsset[trade.inputMint || ""];
@@ -451,7 +465,15 @@ export async function registerRoutes(
         const outputDecimals = isUsdcOutput ? 6 : (outputAsset?.decimals || 9);
         
         const inputAmount = trade.amountIn ? parseFloat(trade.amountIn) / Math.pow(10, inputDecimals) : 0;
-        const outputAmount = trade.amountOut ? parseFloat(trade.amountOut) / Math.pow(10, outputDecimals) : null;
+        let outputAmount = trade.amountOut ? parseFloat(trade.amountOut) / Math.pow(10, outputDecimals) : null;
+        
+        // For buy trades without amountOut, estimate from price
+        if (isUsdcInput && outputAmount === null && trade.outputMint) {
+          const price = tradePrices[trade.outputMint];
+          if (price && price > 0) {
+            outputAmount = inputAmount / price;
+          }
+        }
         
         return {
           ...trade,
