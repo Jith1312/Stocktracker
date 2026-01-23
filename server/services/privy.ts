@@ -1,5 +1,4 @@
 import { PrivyClient } from "@privy-io/server-auth";
-import { VersionedTransaction } from "@solana/web3.js";
 import crypto from "crypto";
 
 const PRIVY_APP_ID = process.env.PRIVY_APP_ID!;
@@ -96,7 +95,7 @@ export async function getEmbeddedWalletId(privyDid: string): Promise<string | nu
 }
 
 export async function signAndSendSolanaTransaction(
-  walletAddress: string,
+  walletId: string,
   transactionBase64: string
 ): Promise<{ signature: string } | { error: string }> {
   try {
@@ -104,18 +103,15 @@ export async function signAndSendSolanaTransaction(
       return { error: "Server-side signing not configured. Missing authorization key." };
     }
     
-    console.log("[Privy] Signing transaction for wallet address:", walletAddress);
+    console.log("[Privy] Signing transaction for wallet ID:", walletId);
     
-    // Decode the base64 transaction to a VersionedTransaction
-    const transactionBuffer = Buffer.from(transactionBase64, "base64");
-    const transaction = VersionedTransaction.deserialize(transactionBuffer);
-    
-    // Use walletApi.solana.signAndSendTransaction from server-auth
+    // Use walletApi.solana.signAndSendTransaction with walletId and caip2
+    // caip2 format: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp (mainnet)
     const response = await serverAuthClient.walletApi.solana.signAndSendTransaction({
-      address: walletAddress,
-      chainType: "solana",
-      transaction: transaction,
-    });
+      walletId: walletId,
+      caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", // Solana mainnet
+      transaction: transactionBase64,
+    } as any);
     
     console.log("[Privy] Transaction sent successfully:", response);
     return { signature: response.hash };
@@ -126,7 +122,7 @@ export async function signAndSendSolanaTransaction(
 }
 
 export async function signSolanaTransaction(
-  walletAddress: string,
+  walletId: string,
   transactionBase64: string
 ): Promise<{ signedTransaction: string } | { error: string }> {
   try {
@@ -134,22 +130,16 @@ export async function signSolanaTransaction(
       return { error: "Server-side signing not configured. Missing authorization key." };
     }
     
-    console.log("[Privy] Signing transaction for wallet address:", walletAddress);
+    console.log("[Privy] Signing transaction for wallet ID:", walletId);
     
-    // Decode the base64 transaction to a VersionedTransaction
-    const transactionBuffer = Buffer.from(transactionBase64, "base64");
-    const transaction = VersionedTransaction.deserialize(transactionBuffer);
-    
-    // Use walletApi.solana.signTransaction from server-auth
+    // Use walletApi.solana.signTransaction with walletId and caip2
     const response = await serverAuthClient.walletApi.solana.signTransaction({
-      address: walletAddress,
-      chainType: "solana",
-      transaction: transaction,
-    });
+      walletId: walletId,
+      caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", // Solana mainnet
+      transaction: transactionBase64,
+    } as any);
     
-    // Convert the signed transaction back to base64
-    const signedTxBuffer = Buffer.from(response.signedTransaction.serialize());
-    return { signedTransaction: signedTxBuffer.toString("base64") };
+    return { signedTransaction: response.signedTransaction };
   } catch (error: any) {
     console.error("[Privy] Failed to sign transaction:", error);
     return { error: error.message || "Failed to sign transaction" };
