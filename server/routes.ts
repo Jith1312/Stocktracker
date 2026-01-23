@@ -195,7 +195,7 @@ export async function registerRoutes(
         return;
       }
       
-      const walletId = await privy.getEmbeddedWalletId((req as any).privyUserId);
+      const walletId = await privyService.getEmbeddedWalletId((req as any).privyUserId);
       
       if (!walletId) {
         res.status(400).json({ error: "No embedded wallet found. Please create a wallet first." });
