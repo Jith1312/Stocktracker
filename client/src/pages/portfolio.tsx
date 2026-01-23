@@ -87,7 +87,12 @@ export default function Portfolio() {
   const sellMutation = useMutation({
     mutationFn: async ({ ticker, amount }: { ticker: string; amount: string }) => {
       const res = await apiRequest("POST", "/api/trade/sell", { ticker, amount });
-      return res.json();
+      const data = await res.json();
+      // Check if response contains an error
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      return data;
     },
     onSuccess: (data) => {
       toast({
