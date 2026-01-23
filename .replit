@@ -45,3 +45,6 @@ integrations = ["javascript_openai_ai_integrations:2.0.0", "javascript_database:
 
 [userenv.shared]
 VITE_PRIVY_KEY_QUORUM_ID = "v9lv5ju2hoxel0evebtppytf"
+
+[userenv.production]
+APP_DOMAIN = "joinarena.xyz"
