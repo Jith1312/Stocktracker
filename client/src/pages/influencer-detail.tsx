@@ -142,8 +142,8 @@ export default function InfluencerDetail() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Recent Tweets & Classifications</CardTitle>
-            <CardDescription>Latest analyzed tweets from this influencer</CardDescription>
+            <CardTitle>Ondo-Tradeable Tweets</CardTitle>
+            <CardDescription>Last 10 tweets mentioning tickers available on Ondo</CardDescription>
           </CardHeader>
           <CardContent>
             {tweetsLoading ? (
@@ -185,7 +185,7 @@ export default function InfluencerDetail() {
                           
                           {tweet.classification.tickers?.map((ticker: any) => (
                             <Badge 
-                              key={ticker.symbol}
+                              key={ticker.ticker}
                               variant={ticker.action === "BUY" ? "default" : ticker.action === "SELL" ? "destructive" : "outline"}
                               className="text-xs flex items-center gap-1"
                             >
@@ -194,7 +194,7 @@ export default function InfluencerDetail() {
                               ) : ticker.action === "SELL" ? (
                                 <TrendingDown className="w-3 h-3" />
                               ) : null}
-                              {ticker.symbol}
+                              ${ticker.ticker}
                             </Badge>
                           ))}
                         </div>
@@ -206,8 +206,8 @@ export default function InfluencerDetail() {
             ) : (
               <div className="text-center py-12 text-muted-foreground">
                 <RefreshCw className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>No tweets analyzed yet</p>
-                <p className="text-sm mt-1">Tweets will appear as they are ingested</p>
+                <p>No Ondo-tradeable tweets yet</p>
+                <p className="text-sm mt-1">Only tweets with tickers available on Ondo will appear here</p>
               </div>
             )}
           </CardContent>

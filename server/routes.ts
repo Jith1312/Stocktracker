@@ -265,20 +265,34 @@ export async function registerRoutes(
   app.get("/api/influencers/:id/tweets", authMiddleware, async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id);
-      const tweets = await storage.getTweetsByInfluencer(id, 50);
+      const tweets = await storage.getTweetsByInfluencer(id, 100);
+      
+      // Get all Ondo tickers for filtering
+      const assets = await storage.getAllAssets();
+      const ondoTickers = new Set(assets.map(a => a.underlyingTicker.toUpperCase()));
       
       const enriched = await Promise.all(tweets.map(async (tweet) => {
         const classification = await storage.getClassificationByTweetId(tweet.id);
+        const tickers = (classification?.resultJson as any)?.tickers || [];
         return {
           ...tweet,
           classification: classification ? {
             isActionable: classification.isActionable,
-            tickers: (classification.resultJson as any)?.tickers || [],
+            tickers,
           } : null,
         };
       }));
       
-      res.json(enriched);
+      // Filter to only tweets with Ondo-supported tickers
+      const filtered = enriched.filter(tweet => {
+        if (!tweet.classification?.tickers) return false;
+        return tweet.classification.tickers.some((t: any) => 
+          ondoTickers.has(t.ticker?.toUpperCase())
+        );
+      });
+      
+      // Return last 10 matching tweets
+      res.json(filtered.slice(0, 10));
     } catch (error) {
       console.error("[API] Get tweets error:", error);
       res.status(500).json({ error: "Failed to get tweets" });
