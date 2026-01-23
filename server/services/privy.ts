@@ -199,33 +199,40 @@ export async function signSolanaTransaction(
       console.log(`[Privy] Original sig ${idx}: isZero=${isZero}`);
     });
     
-    // Check if it's already a VersionedTransaction with serialize method
-    let signedTxBuffer: Buffer;
-    const hasSerialize = typeof signedTx.serialize === 'function';
-    console.log("[Privy] signedTx has serialize method:", hasSerialize);
+    // Always reconstruct the transaction to ensure signatures are properly included
+    // The Privy response object may have serialize() but doesn't serialize correctly
+    console.log("[Privy] Reconstructing transaction with signatures from response...");
     
-    if (hasSerialize) {
-      console.log("[Privy] Using signedTx.serialize() directly");
-      signedTxBuffer = Buffer.from(signedTx.serialize());
-    } else {
-      // If it's a plain object, we need to reconstruct the VersionedTransaction
-      console.log("[Privy] Response is plain object, reconstructing transaction...");
+    // Extract signatures from the response
+    const responseSignatures = (signedTx as any).signatures;
+    const reconstructedSignatures: Uint8Array[] = [];
+    
+    for (let i = 0; i < responseSignatures.length; i++) {
+      const sig = responseSignatures[i];
+      let sigBytes: Uint8Array;
       
-      // Reconstruct signatures from the object representation
-      const signatures = (signedTx as any).signatures.map((sig: any) => {
-        if (sig instanceof Uint8Array) return sig;
-        // Convert object with numeric keys to Uint8Array
-        const bytes = new Uint8Array(64);
-        for (let i = 0; i < 64; i++) {
-          bytes[i] = sig[i] || 0;
+      if (sig instanceof Uint8Array) {
+        sigBytes = sig;
+      } else if (ArrayBuffer.isView(sig)) {
+        sigBytes = new Uint8Array(sig.buffer, sig.byteOffset, sig.byteLength);
+      } else if (typeof sig === 'object') {
+        // Plain object with numeric keys
+        sigBytes = new Uint8Array(64);
+        for (let j = 0; j < 64; j++) {
+          sigBytes[j] = sig[j] || 0;
         }
-        return bytes;
-      });
+      } else {
+        sigBytes = new Uint8Array(64);
+      }
       
-      // Create a new VersionedTransaction with the original message but new signatures
-      const reconstructedTx = new VersionedTransaction(transaction.message, signatures);
-      signedTxBuffer = Buffer.from(reconstructedTx.serialize());
+      const isZero = sigBytes.every((b: number) => b === 0);
+      console.log(`[Privy] Reconstructed sig ${i}: isZero=${isZero}, first4=[${sigBytes.slice(0, 4).join(',')}]`);
+      reconstructedSignatures.push(sigBytes);
     }
+    
+    // Create a new VersionedTransaction with the original message but signed signatures
+    const reconstructedTx = new VersionedTransaction(transaction.message, reconstructedSignatures);
+    const signedTxBuffer = Buffer.from(reconstructedTx.serialize());
     
     console.log("[Privy] Signed transaction serialized, length:", signedTxBuffer.length);
     return { signedTransaction: signedTxBuffer.toString("base64") };
