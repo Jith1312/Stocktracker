@@ -159,7 +159,12 @@ export default function Portfolio() {
   const transferMutation = useMutation({
     mutationFn: async ({ tokenMint, recipientAddress, amount }: { tokenMint: string; recipientAddress: string; amount: string }) => {
       const res = await apiRequest("POST", "/api/transfer", { tokenMint, recipientAddress, amount });
-      return res.json();
+      const data = await res.json();
+      // Check if response contains an error
+      if (data.error) {
+        throw new Error(data.error);
+      }
+      return data;
     },
     onSuccess: (data) => {
       toast({
