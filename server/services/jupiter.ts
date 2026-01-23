@@ -128,8 +128,6 @@ export interface V6SwapResponse {
   prioritizationFeeLamports: number;
 }
 
-const JUPITER_API_KEY = process.env.JUPITER_API_KEY;
-
 export async function getQuoteV6(
   inputMint: string,
   outputMint: string,
