@@ -129,8 +129,7 @@ export default function Portfolio() {
     setSellQuote(null);
     
     try {
-      const res = await apiRequest("POST", "/api/trade/sell-quote", { ticker });
-      const data = await res.json();
+      const data = await apiRequest("POST", "/api/trade/sell-quote", { ticker });
       
       if (data.error) {
         toast({
