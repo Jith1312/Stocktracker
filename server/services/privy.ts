@@ -123,11 +123,9 @@ export async function signAndSendSolanaTransaction(
     
     const privy = getPrivyNodeClient();
     
+    // The SDK expects just the transaction string (base64 encoded)
     const result = await privy.wallets().solana().signAndSendTransaction(walletId, {
-      caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-      params: {
-        transaction: transactionBase64,
-      },
+      transaction: transactionBase64,
     });
     
     console.log("[Privy] Transaction sent successfully:", result);
@@ -149,11 +147,9 @@ export async function signSolanaTransaction(
     
     const privy = getPrivyNodeClient();
     
+    // The SDK expects just the transaction string (base64 encoded)
     const result = await privy.wallets().solana().signTransaction(walletId, {
-      caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-      params: {
-        transaction: transactionBase64,
-      },
+      transaction: transactionBase64,
     });
     
     return { signedTransaction: result.signedTransaction };
