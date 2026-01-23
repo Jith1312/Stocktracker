@@ -54,6 +54,7 @@ export interface IStorage {
 
   getUserAlert(id: number): Promise<UserAlert | undefined>;
   getUserAlertsByUser(userId: number, limit?: number): Promise<UserAlert[]>;
+  getUserAlertsByEvent(alertEventId: number): Promise<UserAlert[]>;
   createUserAlert(userAlert: InsertUserAlert): Promise<UserAlert>;
   updateUserAlert(id: number, data: Partial<UserAlert>): Promise<UserAlert | undefined>;
 
@@ -233,6 +234,11 @@ export class DatabaseStorage implements IStorage {
       .where(eq(userAlerts.userId, userId))
       .orderBy(desc(userAlerts.createdAt))
       .limit(limit);
+  }
+
+  async getUserAlertsByEvent(alertEventId: number): Promise<UserAlert[]> {
+    return db.select().from(userAlerts)
+      .where(eq(userAlerts.alertEventId, alertEventId));
   }
 
   async createUserAlert(insertUserAlert: InsertUserAlert): Promise<UserAlert> {

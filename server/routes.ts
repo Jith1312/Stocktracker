@@ -690,12 +690,72 @@ export async function registerRoutes(
         
         if (action === "trade") {
           const actionText = tradeAction === "SELL" ? "Sell" : "Buy";
-          const appUrl = `${req.protocol}://${req.get("host")}`;
+          const chatId = callback_query.message.chat.id.toString();
+          const messageId = callback_query.message.message_id;
+          
           await telegram.editMessageText(
-            callback_query.message.chat.id.toString(),
-            callback_query.message.message_id,
-            `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...\n\n<a href="${appUrl}/trade/confirm?alertId=${userAlertId}&amount=${amount}&action=${tradeAction}">Click here to confirm</a>`,
+            chatId,
+            messageId,
+            `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...`,
           );
+          
+          try {
+            const userAlert = await storage.getUserAlert(parseInt(userAlertId));
+            if (!userAlert) throw new Error("Alert not found");
+            
+            const alertEvent = await storage.getAlertEvent(userAlert.alertEventId);
+            if (!alertEvent) throw new Error("Alert event not found");
+            
+            const user = await storage.getUser(userAlert.userId);
+            if (!user?.solanaPubkey) throw new Error("No wallet connected");
+            
+            const asset = await storage.getAssetByTicker(alertEvent.ticker);
+            if (!asset) throw new Error("Asset not found");
+            
+            const amountUsd = parseFloat(amount);
+            const amountRaw = jupiter.usdToRawAmount(amountUsd);
+            
+            let inputMint: string, outputMint: string;
+            if (tradeAction === "BUY") {
+              inputMint = USDC_MINT;
+              outputMint = asset.solanaMint;
+            } else {
+              inputMint = asset.solanaMint;
+              outputMint = USDC_MINT;
+            }
+            
+            const quote = await jupiter.getQuote(inputMint, outputMint, amountRaw);
+            
+            const preparedOrder = await storage.createPreparedOrder({
+              userId: user.id,
+              userAlertId: parseInt(userAlertId),
+              side: tradeAction,
+              inputMint,
+              outputMint,
+              amountUsd: amountUsd.toString(),
+              quoteResponse: quote,
+              status: "PENDING",
+            });
+            
+            const appUrl = process.env.REPLIT_DEV_DOMAIN 
+              ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+              : `${req.protocol}://${req.get("host")}`;
+            
+            await telegram.editMessageText(
+              chatId,
+              messageId,
+              `${callback_query.message.text}\n\n✅ Order prepared!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${appUrl}/trade/execute?orderId=${preparedOrder.id}">Tap to sign & execute</a>`,
+            );
+            
+            await storage.updateUserAlert(parseInt(userAlertId), { status: "PREPARED" });
+          } catch (error: any) {
+            console.error("[Telegram] Trade preparation error:", error);
+            await telegram.editMessageText(
+              chatId,
+              messageId,
+              `${callback_query.message.text}\n\n❌ Failed to prepare trade: ${error.message || "Unknown error"}`,
+            );
+          }
         }
         
         if (action === "ignore") {

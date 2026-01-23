@@ -134,6 +134,12 @@ async function sendAlertsForEvent(
       const mutedTickers = await storage.getMutedTickers(user.id);
       if (mutedTickers.some(m => m.ticker === ticker.symbol)) continue;
 
+      const existingAlerts = await storage.getUserAlertsByEvent(alertEventId);
+      if (existingAlerts.some(a => a.userId === user.id)) {
+        console.log(`[Worker] Skipping duplicate alert for user ${user.id}`);
+        continue;
+      }
+
       const userAlert = await storage.createUserAlert({
         userId: user.id,
         alertEventId,
