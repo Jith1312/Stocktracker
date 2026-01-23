@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,12 +12,19 @@ import {
   ExternalLink,
   ArrowUpRight,
   ArrowDownRight,
-  Clock
+  Clock,
+  Loader2
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useState } from "react";
 
 export default function Portfolio() {
+  const { toast } = useToast();
+  const [sellingTicker, setSellingTicker] = useState<string | null>(null);
+  
   const { data: holdings, isLoading: holdingsLoading } = useQuery({
     queryKey: ["/api/portfolio/holdings"],
   });
@@ -25,6 +32,35 @@ export default function Portfolio() {
   const { data: trades, isLoading: tradesLoading } = useQuery({
     queryKey: ["/api/trades"],
   });
+
+  const sellMutation = useMutation({
+    mutationFn: async ({ ticker, amount }: { ticker: string; amount: string }) => {
+      const res = await apiRequest("POST", "/api/trade/sell", { ticker, amount });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "Sell successful!",
+        description: `Transaction: ${data.signature?.slice(0, 12)}...`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/portfolio/holdings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trades"] });
+      setSellingTicker(null);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Sell failed",
+        description: error.message || "Unknown error",
+        variant: "destructive",
+      });
+      setSellingTicker(null);
+    },
+  });
+
+  const handleSell = async (ticker: string, balance: string) => {
+    setSellingTicker(ticker);
+    sellMutation.mutate({ ticker, amount: balance });
+  };
 
   const totalValue = holdings?.reduce((acc: number, h: any) => acc + (h.usdValue || 0), 0) || 0;
 
@@ -147,8 +183,21 @@ export default function Portfolio() {
                             ${holding.usdValue?.toFixed(2) || "—"}
                           </TableCell>
                           <TableCell className="text-right">
-                            <Button size="sm" variant="outline" data-testid={`button-sell-${holding.symbol}`}>
-                              Sell
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              data-testid={`button-sell-${holding.symbol}`}
+                              onClick={() => handleSell(holding.underlyingTicker, holding.balance)}
+                              disabled={sellingTicker === holding.underlyingTicker}
+                            >
+                              {sellingTicker === holding.underlyingTicker ? (
+                                <>
+                                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                  Selling...
+                                </>
+                              ) : (
+                                "Sell"
+                              )}
                             </Button>
                           </TableCell>
                         </TableRow>

@@ -601,11 +601,15 @@ export async function registerRoutes(
         return res.status(404).json({ error: `Asset ${ticker} not found` });
       }
       
-      // Get quote: Token → USDC
-      const amountRaw = jupiter.usdToRawAmount(parseFloat(amount), asset.decimals);
-      console.log(`[Sell] Getting quote to sell ${amount} worth of ${ticker}`);
+      // Get actual token balance from chain
+      const tokenBalance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+      if (tokenBalance.balance === "0") {
+        return res.status(400).json({ error: `No ${ticker} balance to sell` });
+      }
       
-      const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, amountRaw, user.solanaPubkey);
+      console.log(`[Sell] Getting quote to sell ${tokenBalance.balance} raw of ${ticker}`);
+      
+      const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, tokenBalance.balance, user.solanaPubkey);
       
       if (!quote.transaction || !quote.requestId) {
         return res.status(400).json({ error: "Failed to get quote" });
@@ -629,7 +633,7 @@ export async function registerRoutes(
           txSig: executeResult.signature,
           inputMint: asset.solanaMint,
           outputMint: USDC_MINT,
-          amountIn: amountRaw,
+          amountIn: tokenBalance.balance,
           amountOut: executeResult.outputAmountResult,
           status: "COMPLETED",
         });
