@@ -400,8 +400,8 @@ export function startWorkers() {
 
   setupTelegramWebhook();
 
-  cron.schedule("*/2 * * * *", pollTweetsWorker);
-  console.log("[Workers] Tweet poll job scheduled (every 2 minutes)");
+  cron.schedule("*/15 * * * *", pollTweetsWorker);
+  console.log("[Workers] Tweet poll job scheduled (every 15 minutes)");
 
   cron.schedule("*/1 * * * *", classifyTweetsWorker);
   console.log("[Workers] Classification job scheduled (every 1 minute)");
