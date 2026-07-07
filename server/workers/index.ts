@@ -4,11 +4,34 @@ import { tweetProvider } from "../services/tweetProvider";
 import { classifyTweet, shouldCreateAlert } from "../services/classifier";
 import * as telegram from "../services/telegram";
 import * as jupiter from "../services/jupiter";
-import { Connection } from "@solana/web3.js";
-import type { ClassificationResult } from "@shared/schema";
+import * as trading from "../services/trading";
+import type { ClassificationResult, User } from "@shared/schema";
 
-const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || "https://api.mainnet-beta.solana.com";
-const connection = new Connection(SOLANA_RPC_URL);
+const connection = trading.connection;
+
+// Look up the user's position in a stock so the alert can show it.
+// Best-effort: alerts still go out if the balance check fails.
+async function getUserPosition(
+  user: User,
+  ticker: string,
+  priceUsd: number | null
+): Promise<{ balance: string; valueUsd: number | null } | null> {
+  if (!user.solanaPubkey) return null;
+  try {
+    const asset = await storage.getAssetByTicker(ticker);
+    if (!asset) return null;
+    const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
+    const balanceNum = parseFloat(balance.balance) / Math.pow(10, balance.decimals);
+    if (balanceNum <= 0) return null;
+    return {
+      balance: balanceNum.toFixed(4),
+      valueUsd: priceUsd ? balanceNum * priceUsd : null,
+    };
+  } catch (e) {
+    console.log(`[Worker] Error checking holdings for ${ticker}:`, e);
+    return null;
+  }
+}
 
 function getAppDomain(): string {
   // Priority: custom APP_DOMAIN > deployment domain > dev domain
@@ -40,9 +63,10 @@ export async function sendBackfillAlerts(userId: number, influencerId: number): 
 
     // Get recent alert events from this influencer's tweets (last 24 hours)
     const recentAlertEvents = await storage.getRecentAlertEventsForInfluencer(influencerId, 24);
-    
+
     let sentCount = 0;
     const mutedTickers = await storage.getMutedTickers(userId);
+    const priceCache: Record<string, number | null> = {};
 
     for (const alertEvent of recentAlertEvents) {
       // Skip if ticker is muted
@@ -63,39 +87,31 @@ export async function sendBackfillAlerts(userId: number, influencerId: number): 
         status: "SENT",
       });
 
-      // Format and send message
-      const message = telegram.formatAlertMessage(
-        influencer.handle,
-        alertEvent.ticker,
-        alertEvent.action || "NONE",
-        parseFloat(alertEvent.confidence || "1.0"),
-        tweet.text,
-        tweet.url,
-        tweet.tweetCreatedAt || tweet.ingestedAt
-      );
-
-      const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
-      
-      let userHoldsStock = false;
-      if (user.solanaPubkey) {
-        try {
-          const asset = await storage.getAssetByTicker(alertEvent.ticker);
-          if (asset) {
-            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-            userHoldsStock = parseFloat(jupiter.rawAmountToDisplay(balance.balance, balance.decimals)) > 0;
-          }
-        } catch (e) {
-          console.log(`[Worker] Backfill: error checking holdings for ${alertEvent.ticker}:`, e);
-        }
+      if (!(alertEvent.ticker in priceCache)) {
+        const asset = await storage.getAssetByTicker(alertEvent.ticker);
+        priceCache[alertEvent.ticker] = asset ? await trading.getAssetPriceUsd(asset) : null;
       }
-      
-      const buttons = telegram.createTradeButtons(
-        userAlert.id, 
-        APP_URL, 
-        (alertEvent.action || "NONE") as "BUY" | "SELL",
-        defaultAmount,
-        userHoldsStock
-      );
+      const priceUsd = priceCache[alertEvent.ticker];
+      const position = await getUserPosition(user, alertEvent.ticker, priceUsd);
+
+      const message = telegram.formatAlertMessage({
+        influencerHandle: influencer.handle,
+        ticker: alertEvent.ticker,
+        tweetExcerpt: tweet.text,
+        tweetUrl: tweet.url,
+        tweetDate: tweet.tweetCreatedAt || tweet.ingestedAt || undefined,
+        priceUsd,
+        position,
+      });
+
+      const buttons = telegram.createTradeButtons({
+        userAlertId: userAlert.id,
+        appUrl: APP_URL,
+        ticker: alertEvent.ticker,
+        defaultAmountUsd: parseFloat(user.defaultBuyAmountUsd || "10"),
+        userHoldsStock: !!position,
+        holdingValueUsd: position?.valueUsd,
+      });
 
       const sentMessage = await telegram.sendMessage({
         chatId: user.telegramChatId,
@@ -293,6 +309,11 @@ async function sendAlertsForEvent(
     if (!influencer) return;
 
     const subscribers = await storage.getSubscribersForInfluencer(tweet.influencerId);
+    if (subscribers.length === 0) return;
+
+    // Price is per-event, not per-user: fetch it once for everyone's alerts.
+    const eventAsset = await storage.getAssetByTicker(ticker.symbol);
+    const priceUsd = eventAsset ? await trading.getAssetPriceUsd(eventAsset) : null;
 
     for (const sub of subscribers) {
       const user = await storage.getUser(sub.userId);
@@ -313,38 +334,26 @@ async function sendAlertsForEvent(
         status: "SENT",
       });
 
-      const message = telegram.formatAlertMessage(
-        influencer.handle,
-        ticker.symbol,
-        ticker.action,
-        ticker.confidence,
-        tweet.text,
-        tweet.url,
-        tweet.tweetCreatedAt || tweet.ingestedAt
-      );
+      const position = await getUserPosition(user, ticker.symbol, priceUsd);
 
-      const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
-      
-      let userHoldsStock = false;
-      if (user.solanaPubkey) {
-        try {
-          const asset = await storage.getAssetByTicker(ticker.symbol);
-          if (asset) {
-            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-            userHoldsStock = parseFloat(jupiter.rawAmountToDisplay(balance.balance, balance.decimals)) > 0;
-          }
-        } catch (e) {
-          console.log(`[Worker] Error checking holdings for ${ticker.symbol}:`, e);
-        }
-      }
-      
-      const buttons = telegram.createTradeButtons(
-        userAlert.id, 
-        APP_URL, 
-        ticker.action as "BUY" | "SELL",
-        defaultAmount,
-        userHoldsStock
-      );
+      const message = telegram.formatAlertMessage({
+        influencerHandle: influencer.handle,
+        ticker: ticker.symbol,
+        tweetExcerpt: tweet.text,
+        tweetUrl: tweet.url,
+        tweetDate: tweet.tweetCreatedAt || tweet.ingestedAt,
+        priceUsd,
+        position,
+      });
+
+      const buttons = telegram.createTradeButtons({
+        userAlertId: userAlert.id,
+        appUrl: APP_URL,
+        ticker: ticker.symbol,
+        defaultAmountUsd: parseFloat(user.defaultBuyAmountUsd || "10"),
+        userHoldsStock: !!position,
+        holdingValueUsd: position?.valueUsd,
+      });
 
       const sentMessage = await telegram.sendMessage({
         chatId: user.telegramChatId,

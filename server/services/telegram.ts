@@ -13,6 +13,7 @@ interface SendMessageOptions {
   replyMarkup?: {
     inline_keyboard: InlineKeyboardButton[][];
   };
+  disableWebPagePreview?: boolean;
 }
 
 interface TelegramMessage {
@@ -37,6 +38,7 @@ export async function sendMessage(options: SendMessageOptions): Promise<Telegram
         text: options.text,
         parse_mode: options.parseMode || "HTML",
         reply_markup: options.replyMarkup,
+        link_preview_options: { is_disabled: options.disableWebPagePreview !== false },
       }),
     });
 
@@ -94,6 +96,7 @@ export async function editMessageText(
         text,
         parse_mode: "HTML",
         reply_markup: replyMarkup,
+        link_preview_options: { is_disabled: true },
       }),
     });
 
@@ -104,61 +107,129 @@ export async function editMessageText(
   }
 }
 
-export function formatAlertMessage(
-  influencerHandle: string,
-  ticker: string,
-  action: string,
-  confidence: number,
-  tweetExcerpt: string,
-  tweetUrl: string,
-  tweetDate?: Date
-): string {
-  const dateStr = tweetDate 
-    ? tweetDate.toLocaleString("en-US", { 
-        month: "short", 
-        day: "numeric", 
-        hour: "numeric", 
-        minute: "2-digit",
-        hour12: true 
-      })
-    : "";
-  
-  return `📢 <b>$${ticker} Mentioned!</b>
+// Remove (or replace) just the buttons on a message without touching its text.
+// Used to retire the action buttons on an alert once it's been acted on,
+// so the original alert content and formatting stay intact.
+export async function editMessageReplyMarkup(
+  chatId: string,
+  messageId: number,
+  replyMarkup?: { inline_keyboard: InlineKeyboardButton[][] }
+): Promise<boolean> {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) return false;
 
-👤 From: @${influencerHandle}${dateStr ? ` • ${dateStr}` : ""}
+  try {
+    const response = await fetch(`${TELEGRAM_API_URL}/bot${botToken}/editMessageReplyMarkup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: replyMarkup ?? { inline_keyboard: [] },
+      }),
+    });
 
-"${tweetExcerpt.slice(0, 250)}${tweetExcerpt.length > 250 ? "..." : ""}"
-
-<a href="${tweetUrl}">View Tweet</a>`;
+    return response.ok;
+  } catch (error) {
+    console.error("[Telegram] Error editing reply markup:", error);
+    return false;
+  }
 }
 
-export function createTradeButtons(
-  userAlertId: number, 
-  appUrl: string, 
-  action: "BUY" | "SELL" = "BUY",
-  defaultAmount: number = 10,
-  userHoldsStock: boolean = false
-): InlineKeyboardButton[][] {
-  const amounts = [defaultAmount, defaultAmount * 2.5];
-  
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+export interface AlertMessageContext {
+  influencerHandle: string;
+  ticker: string;
+  tweetExcerpt: string;
+  tweetUrl: string;
+  tweetDate?: Date;
+  /** Current price of 1 share in USD, when available */
+  priceUsd?: number | null;
+  /** The user's current position in this stock, when they hold it */
+  position?: { balance: string; valueUsd?: number | null } | null;
+}
+
+export function formatAlertMessage(ctx: AlertMessageContext): string {
+  const dateStr = ctx.tweetDate
+    ? ctx.tweetDate.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      })
+    : "";
+
+  const excerpt = escapeHtml(
+    ctx.tweetExcerpt.length > 250 ? `${ctx.tweetExcerpt.slice(0, 250)}…` : ctx.tweetExcerpt
+  );
+
+  const lines = [
+    `🚨 <b>@${escapeHtml(ctx.influencerHandle)} mentioned $${escapeHtml(ctx.ticker)}</b>${dateStr ? ` · ${dateStr}` : ""}`,
+    "",
+    `<i>"${excerpt}"</i>`,
+    "",
+  ];
+
+  const facts: string[] = [];
+  if (ctx.priceUsd != null && ctx.priceUsd > 0) {
+    facts.push(`💵 $${ctx.ticker} price: <b>$${ctx.priceUsd.toFixed(2)}</b>`);
+  }
+  if (ctx.position) {
+    const value =
+      ctx.position.valueUsd != null && ctx.position.valueUsd > 0
+        ? ` (~$${ctx.position.valueUsd.toFixed(2)})`
+        : "";
+    facts.push(`📊 You hold: <b>${ctx.position.balance} ${ctx.ticker}</b>${value}`);
+  }
+  if (facts.length > 0) {
+    lines.push(...facts, "");
+  }
+
+  lines.push(`<a href="${ctx.tweetUrl}">View post on X</a>`);
+
+  return lines.join("\n");
+}
+
+export interface TradeButtonContext {
+  userAlertId: number;
+  appUrl: string;
+  ticker: string;
+  defaultAmountUsd?: number;
+  /** Set when the user already holds this stock so we can offer a sell */
+  holdingValueUsd?: number | null;
+  userHoldsStock?: boolean;
+}
+
+export function createTradeButtons(ctx: TradeButtonContext): InlineKeyboardButton[][] {
+  const base = Math.max(1, Math.round(ctx.defaultAmountUsd || 10));
+  const larger = Math.max(base + 1, Math.round(base * 2.5));
+
   const buttons: InlineKeyboardButton[][] = [
     [
-      { text: `🟢 Buy $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:BUY` },
-      { text: `🟢 Buy $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:BUY` },
+      { text: `🟢 Buy $${base}`, callback_data: `trade:${ctx.userAlertId}:${base}:BUY` },
+      { text: `🟢 Buy $${larger}`, callback_data: `trade:${ctx.userAlertId}:${larger}:BUY` },
     ],
   ];
-  
-  if (userHoldsStock) {
+
+  if (ctx.userHoldsStock) {
+    const value =
+      ctx.holdingValueUsd != null && ctx.holdingValueUsd > 0
+        ? ` (~$${ctx.holdingValueUsd.toFixed(2)})`
+        : "";
     buttons.push([
-      { text: `🔴 Sell All`, callback_data: `trade:${userAlertId}:ALL:SELL` },
+      { text: `🔴 Sell all ${ctx.ticker}${value}`, callback_data: `trade:${ctx.userAlertId}:ALL:SELL` },
     ]);
   }
-  
+
   buttons.push([
-    { text: "📱 Open App", url: `${appUrl}/trade/confirm?alertId=${userAlertId}` },
-    { text: "❌ Ignore", callback_data: `ignore:${userAlertId}` },
+    { text: "✏️ Custom amount", url: `${ctx.appUrl}/trade/confirm?alertId=${ctx.userAlertId}` },
+    { text: "🔕 Dismiss", callback_data: `ignore:${ctx.userAlertId}` },
   ]);
-  
+
   return buttons;
 }
 
@@ -178,10 +249,10 @@ export async function setWebhook(webhookUrl: string): Promise<boolean> {
 
     const data = await response.json();
     console.log("[Telegram] Set webhook result:", data);
-    
+
     // Set bot commands so users see them when typing /
     await setBotCommands();
-    
+
     return data.ok;
   } catch (error) {
     console.error("[Telegram] Error setting webhook:", error);
@@ -195,11 +266,14 @@ export async function setBotCommands(): Promise<boolean> {
 
   const commands = [
     { command: "start", description: "Link your Telegram to Arena" },
-    { command: "help", description: "Show available commands" },
     { command: "balance", description: "View your wallet balance" },
-    { command: "portfolio", description: "View your token holdings" },
-    { command: "sell", description: "Sell stock tokens" },
+    { command: "portfolio", description: "View holdings and recent trades" },
+    { command: "sell", description: "Sell a stock position" },
     { command: "trades", description: "View your recent trades" },
+    { command: "amount", description: "Set your default buy amount, e.g. /amount 50" },
+    { command: "mute", description: "Mute alerts for a ticker, e.g. /mute TSLA" },
+    { command: "unmute", description: "Unmute a ticker, e.g. /unmute TSLA" },
+    { command: "help", description: "Show available commands" },
   ];
 
   try {

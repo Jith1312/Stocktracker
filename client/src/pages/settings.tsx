@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { 
+import {
   Shield,
   Zap,
   Loader2,
@@ -15,9 +15,12 @@ import {
   AlertTriangle,
   Wallet,
   DollarSign,
+  BellOff,
+  X,
+  Plus,
 } from "lucide-react";
 import { SiTelegram } from "react-icons/si";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -45,6 +48,11 @@ interface SignerStatus {
   autoExecuteEnabled: boolean;
 }
 
+interface MutedTicker {
+  id: number;
+  ticker: string;
+}
+
 export default function Settings() {
   const { user, authenticated } = usePrivy();
   const { wallets } = useWallets();
@@ -52,6 +60,8 @@ export default function Settings() {
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
+  const [newMutedTicker, setNewMutedTicker] = useState("");
+  const telegramPollRef = useRef<NodeJS.Timeout | null>(null);
   
   // Fetch config from server (runtime, not build-time)
   const { data: appConfig } = useQuery<AppConfig>({
@@ -104,11 +114,73 @@ export default function Settings() {
     }
   }, [profile?.defaultBuyAmountUsd]);
 
+  const { data: mutedTickers } = useQuery<MutedTicker[]>({
+    queryKey: ["/api/muted-tickers"],
+    enabled: authenticated,
+  });
+
+  // Stop polling once Telegram shows as connected
   useEffect(() => {
-    console.log("[Settings] Profile data:", profile);
-    console.log("[Settings] Signer config:", signerConfig);
-    console.log("[Settings] hasSessionSigner:", hasSessionSigner);
-  }, [profile, signerConfig, hasSessionSigner]);
+    if (profile?.telegramChatId && telegramPollRef.current) {
+      clearInterval(telegramPollRef.current);
+      telegramPollRef.current = null;
+      toast({
+        title: "Telegram connected!",
+        description: "Trading alerts will arrive in your Telegram chat.",
+      });
+    }
+  }, [profile?.telegramChatId, toast]);
+
+  const connectTelegramMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("GET", "/api/telegram/link");
+    },
+    onSuccess: (data) => {
+      if (data.deepLink) {
+        window.open(data.deepLink, "_blank");
+        if (telegramPollRef.current) clearInterval(telegramPollRef.current);
+        let pollCount = 0;
+        telegramPollRef.current = setInterval(() => {
+          pollCount++;
+          if (pollCount >= 30) {
+            if (telegramPollRef.current) clearInterval(telegramPollRef.current);
+            telegramPollRef.current = null;
+            return;
+          }
+          queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
+        }, 2000);
+      }
+    },
+    onError: () => {
+      toast({
+        title: "Connection failed",
+        description: "Could not generate a Telegram link. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const muteTickerMutation = useMutation({
+    mutationFn: (ticker: string) => apiRequest("POST", "/api/muted-tickers", { ticker }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/muted-tickers"] });
+      setNewMutedTicker("");
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Couldn't mute ticker",
+        description: error.message?.replace(/^\d+:\s*/, "") || "Please try again",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const unmuteTickerMutation = useMutation({
+    mutationFn: (ticker: string) => apiRequest("DELETE", `/api/muted-tickers/${ticker}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/muted-tickers"] });
+    },
+  });
 
   const updateProfileMutation = useMutation({
     mutationFn: async (data: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean }) => {
@@ -338,6 +410,52 @@ export default function Settings() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
+              <SiTelegram className="w-5 h-5 text-[#0088cc]" />
+              Telegram Alerts
+            </CardTitle>
+            <CardDescription>
+              Alerts and one-tap trading happen in your Telegram chat
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {profileLoading ? (
+              <Skeleton className="h-12 w-full" />
+            ) : profile?.telegramChatId ? (
+              <div className="flex items-center gap-3 p-3 rounded-md bg-primary/10 border border-primary/20">
+                <Check className="w-5 h-5 text-primary" />
+                <div>
+                  <p className="font-medium text-sm">Connected</p>
+                  <p className="text-xs text-muted-foreground">@{profile.telegramUsername || "Unknown"}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start gap-3 p-3 rounded-md border border-yellow-500/30 bg-yellow-500/10">
+                <AlertTriangle className="w-5 h-5 text-yellow-500 shrink-0 mt-0.5" />
+                <p className="text-sm text-muted-foreground">
+                  Not connected — you won't receive any alerts until you connect Telegram.
+                </p>
+              </div>
+            )}
+            <Button
+              variant={profile?.telegramChatId ? "outline" : "default"}
+              className="w-full"
+              onClick={() => connectTelegramMutation.mutate()}
+              disabled={connectTelegramMutation.isPending || !authenticated}
+              data-testid="button-connect-telegram"
+            >
+              {connectTelegramMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <SiTelegram className="w-4 h-4 mr-2" />
+              )}
+              {profile?.telegramChatId ? "Reconnect Telegram" : "Connect Telegram"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-primary" />
               Default Trade Amount
             </CardTitle>
@@ -376,9 +494,77 @@ export default function Settings() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Quick trade buttons in Telegram will use $10 and $25 by default.
+                  {(() => {
+                    const base = Math.max(1, Math.round(parseFloat(defaultAmount) || 10));
+                    const larger = Math.max(base + 1, Math.round(base * 2.5));
+                    return `Quick-buy buttons in Telegram alerts will show $${base} and $${larger}.`;
+                  })()}
                 </p>
               </>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BellOff className="w-5 h-5 text-primary" />
+              Muted Tickers
+            </CardTitle>
+            <CardDescription>
+              You won't receive alerts for muted tickers, even when your influencers mention them
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex gap-3">
+              <Input
+                placeholder="e.g. TSLA"
+                value={newMutedTicker}
+                onChange={(e) => setNewMutedTicker(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newMutedTicker.trim()) {
+                    muteTickerMutation.mutate(newMutedTicker.trim());
+                  }
+                }}
+                maxLength={10}
+                data-testid="input-mute-ticker"
+              />
+              <Button
+                onClick={() => muteTickerMutation.mutate(newMutedTicker.trim())}
+                disabled={!newMutedTicker.trim() || muteTickerMutation.isPending}
+                data-testid="button-mute-ticker"
+              >
+                {muteTickerMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4 mr-1" />
+                    Mute
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {mutedTickers && mutedTickers.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {mutedTickers.map((m) => (
+                  <Badge key={m.id} variant="secondary" className="gap-1 pr-1" data-testid={`badge-muted-${m.ticker}`}>
+                    ${m.ticker}
+                    <button
+                      onClick={() => unmuteTickerMutation.mutate(m.ticker)}
+                      className="ml-1 rounded-full hover:bg-muted-foreground/20 p-0.5"
+                      aria-label={`Unmute ${m.ticker}`}
+                      data-testid={`button-unmute-${m.ticker}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                No muted tickers. You can also mute from Telegram with /mute TSLA.
+              </p>
             )}
           </CardContent>
         </Card>

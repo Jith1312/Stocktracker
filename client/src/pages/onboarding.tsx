@@ -5,16 +5,17 @@ import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { 
-  Zap, 
-  Wallet, 
-  Copy, 
-  Check, 
+import {
+  Zap,
+  Wallet,
+  Copy,
+  Check,
   ArrowRight,
   Loader2,
   Shield,
   DollarSign
 } from "lucide-react";
+import { SiTelegram } from "react-icons/si";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -36,51 +37,99 @@ interface UserProfile {
   onboardingCompleted?: boolean;
 }
 
+interface UserStats {
+  usdcBalance: string;
+}
+
+type Step = "telegram" | "auto-trading" | "add-funds";
+const STEPS: Step[] = ["telegram", "auto-trading", "add-funds"];
+
 export default function Onboarding() {
   const { user, authenticated, ready } = usePrivy();
   const { wallets } = useWallets();
   const { addSessionSigners } = useSessionSigners();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
-  
-  const [step, setStep] = useState<"auto-trading" | "add-funds">("auto-trading");
+
+  const [step, setStep] = useState<Step>("telegram");
   const [copied, setCopied] = useState(false);
   const [isEnabling, setIsEnabling] = useState(false);
-  
+  const [telegramOpened, setTelegramOpened] = useState(false);
+
   // Fetch config from server (runtime, not build-time)
   const { data: appConfig } = useQuery<AppConfig>({
     queryKey: ["/api/config"],
   });
   const KEY_QUORUM_ID = appConfig?.keyQuorumId;
-  
+
   // Find the embedded Privy Solana wallet from useWallets hook
-  const embeddedWalletFromHook = wallets.find(w => 
-    w.walletClientType === "privy" && 
+  const embeddedWalletFromHook = wallets.find(w =>
+    w.walletClientType === "privy" &&
     (w as any).chainType === "solana"
   ) || wallets.find(w => w.walletClientType === "privy");
-  
+
   // Also check user.linkedAccounts for embedded Solana wallet as fallback
   const embeddedWalletFromUser = user?.linkedAccounts?.find(
-    (account: any) => account.type === "wallet" && 
-                       account.walletClientType === "privy" && 
+    (account: any) => account.type === "wallet" &&
+                       account.walletClientType === "privy" &&
                        account.chainType === "solana"
   );
-  
+
   // Use either source - prefer the hook for address access
   const embeddedWallet = embeddedWalletFromHook || embeddedWalletFromUser;
   const embeddedWalletAddress = embeddedWalletFromHook?.address || (embeddedWalletFromUser as any)?.address;
-  
+
+  // Poll the profile while waiting for the Telegram link to complete
   const { data: profile, isLoading: profileLoading } = useQuery<UserProfile>({
     queryKey: ["/api/user/profile"],
     enabled: authenticated && ready,
+    refetchInterval: step === "telegram" && telegramOpened ? 2000 : false,
   });
-  
+
+  // Poll the USDC balance on the funding step so we can detect the deposit
+  const { data: stats } = useQuery<UserStats>({
+    queryKey: ["/api/user/stats"],
+    enabled: authenticated && ready && step === "add-funds",
+    refetchInterval: step === "add-funds" ? 5000 : false,
+  });
+  const usdcBalance = parseFloat(stats?.usdcBalance || "0");
+
+  const telegramConnected = !!profile?.telegramChatId;
+
   useEffect(() => {
     if (profile?.onboardingCompleted) {
       setLocation("/dashboard");
     }
   }, [profile?.onboardingCompleted, setLocation]);
-  
+
+  useEffect(() => {
+    if (telegramConnected && telegramOpened && step === "telegram") {
+      toast({
+        title: "Telegram connected!",
+        description: "Alerts will arrive in your Telegram chat.",
+      });
+    }
+  }, [telegramConnected, telegramOpened, step, toast]);
+
+  const connectTelegramMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("GET", "/api/telegram/link");
+    },
+    onSuccess: (data) => {
+      if (data.deepLink) {
+        window.open(data.deepLink, "_blank");
+        setTelegramOpened(true);
+      }
+    },
+    onError: () => {
+      toast({
+        title: "Connection failed",
+        description: "Could not generate a Telegram link. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const enableSignerMutation = useMutation({
     mutationFn: async () => {
       return await apiRequest("POST", "/api/user/enable-signer");
@@ -89,7 +138,7 @@ export default function Onboarding() {
       queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
     },
   });
-  
+
   const updateProfileMutation = useMutation({
     mutationFn: async (data: { autoExecuteEnabled?: boolean; onboardingCompleted?: boolean }) => {
       return await apiRequest("PATCH", "/api/user/profile", data);
@@ -98,7 +147,7 @@ export default function Onboarding() {
       queryClient.invalidateQueries({ queryKey: ["/api/user/profile"] });
     },
   });
-  
+
   const handleEnableAutoTrading = async () => {
     if (!embeddedWallet || !embeddedWalletAddress) {
       toast({
@@ -133,55 +182,51 @@ export default function Onboarding() {
             ],
           });
         } catch (signerError: any) {
-          if (!signerError?.message?.toLowerCase().includes('duplicate') && 
+          if (!signerError?.message?.toLowerCase().includes('duplicate') &&
               !signerError?.message?.toLowerCase().includes('already')) {
             throw signerError;
           }
         }
       }
-      
+
       await enableSignerMutation.mutateAsync();
       await updateProfileMutation.mutateAsync({ autoExecuteEnabled: true });
-      
+
       toast({
-        title: "Auto-trading enabled!",
-        description: "You can now execute trades with one tap.",
+        title: "One-tap trading enabled!",
+        description: "You can now trade straight from Telegram alerts.",
       });
-      
+
       setStep("add-funds");
     } catch (error: any) {
       console.error("Failed to enable auto-trading:", error);
       toast({
         title: "Setup failed",
-        description: error.message || "Could not enable auto-trading.",
+        description: error.message || "Could not enable one-tap trading.",
         variant: "destructive",
       });
     } finally {
       setIsEnabling(false);
     }
   };
-  
-  const handleSkipAutoTrading = () => {
-    setStep("add-funds");
-  };
-  
+
   const handleCopyAddress = async () => {
     if (profile?.solanaPubkey) {
       await navigator.clipboard.writeText(profile.solanaPubkey);
       setCopied(true);
       toast({
         title: "Address copied",
-        description: "Send USDC to this address to start trading.",
+        description: "Send USDC (Solana) to this address to start trading.",
       });
       setTimeout(() => setCopied(false), 2000);
     }
   };
-  
+
   const handleFinish = async () => {
     await updateProfileMutation.mutateAsync({ onboardingCompleted: true });
     setLocation("/dashboard");
   };
-  
+
   if (!ready || profileLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -189,20 +234,93 @@ export default function Onboarding() {
       </div>
     );
   }
-  
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="w-full max-w-lg space-y-6">
         <div className="text-center">
           <h1 className="text-3xl font-bold">Welcome to Arena</h1>
-          <p className="text-muted-foreground mt-2">Let's get you set up for trading</p>
+          <p className="text-muted-foreground mt-2">
+            Three quick steps and you'll be trading from Telegram alerts
+          </p>
         </div>
-        
+
         <div className="flex justify-center gap-2">
-          <div className={`w-3 h-3 rounded-full ${step === "auto-trading" ? "bg-primary" : "bg-muted"}`} />
-          <div className={`w-3 h-3 rounded-full ${step === "add-funds" ? "bg-primary" : "bg-muted"}`} />
+          {STEPS.map((s, i) => (
+            <div
+              key={s}
+              className={`h-2 rounded-full transition-all ${
+                s === step ? "w-8 bg-primary" : STEPS.indexOf(step) > i ? "w-2 bg-primary/60" : "w-2 bg-muted"
+              }`}
+            />
+          ))}
         </div>
-        
+
+        {step === "telegram" && (
+          <Card>
+            <CardHeader className="text-center">
+              <div className="mx-auto w-16 h-16 rounded-full bg-[#0088cc]/10 flex items-center justify-center mb-4">
+                <SiTelegram className="w-8 h-8 text-[#0088cc]" />
+              </div>
+              <CardTitle>Connect Telegram</CardTitle>
+              <CardDescription>
+                This is where the magic happens: alerts land in your Telegram the moment an influencer mentions a stock, with one-tap Buy buttons.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {telegramConnected ? (
+                <>
+                  <div className="flex items-center gap-3 p-4 rounded-lg bg-primary/10 border border-primary/20">
+                    <Check className="w-5 h-5 text-primary" />
+                    <div>
+                      <p className="font-medium text-sm">Connected</p>
+                      <p className="text-xs text-muted-foreground">
+                        @{profile?.telegramUsername || "your Telegram"} will receive alerts
+                      </p>
+                    </div>
+                  </div>
+                  <Button onClick={() => setStep("auto-trading")} className="w-full" data-testid="button-telegram-continue">
+                    Continue
+                    <ArrowRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <Button
+                    onClick={() => connectTelegramMutation.mutate()}
+                    disabled={connectTelegramMutation.isPending}
+                    className="w-full"
+                    data-testid="button-connect-telegram"
+                  >
+                    {connectTelegramMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <SiTelegram className="w-4 h-4 mr-2" />
+                    )}
+                    Connect Telegram
+                  </Button>
+
+                  {telegramOpened && (
+                    <div className="flex items-center gap-2 justify-center text-sm text-muted-foreground">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Waiting for you to tap "Start" in Telegram…
+                    </div>
+                  )}
+
+                  <Button
+                    variant="ghost"
+                    onClick={() => setStep("auto-trading")}
+                    className="w-full"
+                    data-testid="button-skip-telegram"
+                  >
+                    Skip for now
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {step === "auto-trading" && (
           <Card>
             <CardHeader className="text-center">
@@ -226,10 +344,10 @@ export default function Onboarding() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="space-y-3">
-                <Button 
-                  onClick={handleEnableAutoTrading} 
+                <Button
+                  onClick={handleEnableAutoTrading}
                   disabled={isEnabling || !embeddedWallet}
                   className="w-full"
                   data-testid="button-enable-auto-trading"
@@ -242,14 +360,14 @@ export default function Onboarding() {
                   ) : (
                     <>
                       <Zap className="w-4 h-4 mr-2" />
-                      Enable Auto-Trading
+                      Enable One-Tap Trading
                     </>
                   )}
                 </Button>
-                
-                <Button 
-                  variant="ghost" 
-                  onClick={handleSkipAutoTrading}
+
+                <Button
+                  variant="ghost"
+                  onClick={() => setStep("add-funds")}
                   className="w-full"
                   data-testid="button-skip-auto-trading"
                 >
@@ -259,7 +377,7 @@ export default function Onboarding() {
             </CardContent>
           </Card>
         )}
-        
+
         {step === "add-funds" && (
           <Card>
             <CardHeader className="text-center">
@@ -272,15 +390,21 @@ export default function Onboarding() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              {profile?.signerEnabled && (
-                <div className="flex items-center gap-2 justify-center">
+              <div className="flex items-center gap-2 justify-center flex-wrap">
+                {telegramConnected && (
                   <Badge variant="default" className="gap-1">
                     <Check className="w-3 h-3" />
-                    Auto-Trading Enabled
+                    Telegram Connected
                   </Badge>
-                </div>
-              )}
-              
+                )}
+                {profile?.signerEnabled && (
+                  <Badge variant="default" className="gap-1">
+                    <Check className="w-3 h-3" />
+                    One-Tap Trading Enabled
+                  </Badge>
+                )}
+              </div>
+
               <div className="p-4 rounded-lg border border-border bg-muted/30">
                 <p className="text-xs text-muted-foreground mb-2">Your Wallet Address</p>
                 <div className="flex items-center gap-2">
@@ -298,22 +422,32 @@ export default function Onboarding() {
                   </Button>
                 </div>
               </div>
-              
-              <div className="p-4 rounded-lg border border-primary/20 bg-primary/5">
-                <div className="flex items-start gap-3">
-                  <DollarSign className="w-5 h-5 text-primary mt-0.5" />
+
+              {usdcBalance > 0 ? (
+                <div className="flex items-center gap-3 p-4 rounded-lg bg-primary/10 border border-primary/20">
+                  <Check className="w-5 h-5 text-primary" />
                   <div>
-                    <p className="font-medium text-sm">How to add funds</p>
-                    <ol className="text-xs text-muted-foreground mt-2 space-y-1 list-decimal list-inside">
-                      <li>Copy your wallet address above</li>
-                      <li>Send USDC (Solana network) from any exchange or wallet</li>
-                      <li>Minimum $10 for your first trade</li>
-                    </ol>
+                    <p className="font-medium text-sm">${usdcBalance.toFixed(2)} USDC received</p>
+                    <p className="text-xs text-muted-foreground">You're ready to trade!</p>
                   </div>
                 </div>
-              </div>
-              
-              <Button 
+              ) : (
+                <div className="p-4 rounded-lg border border-primary/20 bg-primary/5">
+                  <div className="flex items-start gap-3">
+                    <DollarSign className="w-5 h-5 text-primary mt-0.5" />
+                    <div>
+                      <p className="font-medium text-sm">How to add funds</p>
+                      <ol className="text-xs text-muted-foreground mt-2 space-y-1 list-decimal list-inside">
+                        <li>Copy your wallet address above</li>
+                        <li>Send USDC (Solana network) from any exchange or wallet</li>
+                        <li>We'll detect the deposit automatically</li>
+                      </ol>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <Button
                 onClick={handleFinish}
                 className="w-full"
                 disabled={updateProfileMutation.isPending}
@@ -324,7 +458,7 @@ export default function Onboarding() {
                 ) : (
                   <ArrowRight className="w-4 h-4 mr-2" />
                 )}
-                Continue to Dashboard
+                {usdcBalance > 0 ? "Start Trading" : "I'll fund it later"}
               </Button>
             </CardContent>
           </Card>

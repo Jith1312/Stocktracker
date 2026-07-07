@@ -71,7 +71,8 @@ export default function Dashboard() {
   });
 
   const { data: recentAlerts, isLoading: alertsLoading } = useQuery<Alert[]>({
-    queryKey: ["/api/alerts", "recent"],
+    queryKey: ["/api/alerts"],
+    enabled: authenticated,
   });
 
   const walletAddress = user?.wallet?.address || profile?.solanaPubkey;
@@ -273,9 +274,15 @@ export default function Dashboard() {
               )}
               
               <div className="flex gap-3">
-                <Button variant="outline" className="flex-1" data-testid="button-view-explorer">
-                  <ExternalLink className="w-4 h-4 mr-2" />
-                  View on Explorer
+                <Button variant="outline" className="flex-1" disabled={!walletAddress} asChild data-testid="button-view-explorer">
+                  <a
+                    href={walletAddress ? `https://solscan.io/account/${walletAddress}` : undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink className="w-4 h-4 mr-2" />
+                    View on Explorer
+                  </a>
                 </Button>
               </div>
             </CardContent>
@@ -345,34 +352,39 @@ export default function Dashboard() {
                   <Skeleton key={i} className="h-20 w-full" />
                 ))}
               </div>
-            ) : recentAlerts?.length > 0 ? (
+            ) : recentAlerts && recentAlerts.length > 0 ? (
               <div className="space-y-4">
                 {recentAlerts.slice(0, 5).map((alert: any) => (
-                  <div 
-                    key={alert.id} 
+                  <div
+                    key={alert.id}
                     className="flex items-center justify-between p-4 rounded-md bg-muted/30 border border-border hover-elevate"
                     data-testid={`alert-item-${alert.id}`}
                   >
                     <div className="flex items-center gap-4">
                       <div className={`w-2 h-2 rounded-full ${
-                        alert.action === "BUY" ? "bg-green-500" : "bg-red-500"
+                        alert.action === "BUY" ? "bg-green-500" :
+                        alert.action === "SELL" ? "bg-red-500" : "bg-primary"
                       }`} />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold">{alert.ticker}</span>
-                          <Badge variant={alert.action === "BUY" ? "default" : "destructive"}>
-                            {alert.action}
+                          <span className="font-semibold">${alert.ticker}</span>
+                          <Badge variant={
+                            alert.action === "BUY" ? "default" :
+                            alert.action === "SELL" ? "destructive" : "secondary"
+                          }>
+                            {alert.action === "BUY" || alert.action === "SELL" ? alert.action : "Mention"}
                           </Badge>
-                          <Badge variant="secondary">{Math.round(alert.confidence * 100)}%</Badge>
                         </div>
                         <p className="text-sm text-muted-foreground mt-1">
                           @{alert.influencerHandle}
                         </p>
                       </div>
                     </div>
-                    <Button size="sm" variant="outline" data-testid={`button-trade-${alert.id}`}>
-                      Trade
-                    </Button>
+                    <Link href={`/trade/confirm?alertId=${alert.id}`}>
+                      <Button size="sm" variant="outline" data-testid={`button-trade-${alert.id}`}>
+                        Trade
+                      </Button>
+                    </Link>
                   </div>
                 ))}
               </div>

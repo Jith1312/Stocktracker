@@ -18,10 +18,12 @@ import { Link } from "wouter";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { formatDistanceToNow } from "date-fns";
 
-function AlertCard({ alert }: { alert: any }) {
+function AlertCard({ alert, defaultAmount }: { alert: any; defaultAmount: number }) {
   const isBuy = alert.action === "BUY";
-  const confidencePercent = Math.round((alert.confidence || 0) * 100);
-  
+  const isSell = alert.action === "SELL";
+  const quickAmount = Math.max(1, Math.round(defaultAmount));
+  const largerAmount = Math.max(quickAmount + 1, Math.round(quickAmount * 2.5));
+
   const statusColors: Record<string, string> = {
     SENT: "bg-blue-500/10 text-blue-500 border-blue-500/20",
     CLICKED: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
@@ -47,21 +49,20 @@ function AlertCard({ alert }: { alert: any }) {
           <div className="flex-1 space-y-3">
             <div className="flex items-center gap-3">
               <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                isBuy ? "bg-green-500/10" : "bg-red-500/10"
+                isSell ? "bg-red-500/10" : "bg-green-500/10"
               }`}>
-                {isBuy ? (
-                  <TrendingUp className="w-5 h-5 text-green-500" />
-                ) : (
+                {isSell ? (
                   <TrendingDown className="w-5 h-5 text-red-500" />
+                ) : (
+                  <TrendingUp className="w-5 h-5 text-green-500" />
                 )}
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-xl font-bold">{alert.ticker}</span>
-                  <Badge variant={isBuy ? "default" : "destructive"}>
-                    {alert.action}
+                  <span className="text-xl font-bold">${alert.ticker}</span>
+                  <Badge variant={isBuy ? "default" : isSell ? "destructive" : "secondary"}>
+                    {isBuy || isSell ? alert.action : "Mention"}
                   </Badge>
-                  <Badge variant="secondary">{confidencePercent}%</Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">
                   @{alert.influencerHandle} · {formatDistanceToNow(new Date(alert.createdAt), { addSuffix: true })}
@@ -80,7 +81,7 @@ function AlertCard({ alert }: { alert: any }) {
                 <StatusIcon className="w-3 h-3" />
                 <span>{alert.status}</span>
               </div>
-              {alert.sentiment && (
+              {alert.sentiment && alert.sentiment !== "NEUTRAL" && (
                 <Badge variant="outline" className="text-xs">
                   {alert.sentiment}
                 </Badge>
@@ -91,14 +92,14 @@ function AlertCard({ alert }: { alert: any }) {
           <div className="flex flex-col gap-2">
             {alert.status === "SENT" && (
               <>
-                <Link href={`/trade/confirm?alertId=${alert.id}&amount=10`}>
-                  <Button size="sm" className="w-full" data-testid={`button-buy-10-${alert.id}`}>
-                    Buy $10
+                <Link href={`/trade/confirm?alertId=${alert.id}&amount=${quickAmount}`}>
+                  <Button size="sm" className="w-full" data-testid={`button-buy-${quickAmount}-${alert.id}`}>
+                    Buy ${quickAmount}
                   </Button>
                 </Link>
-                <Link href={`/trade/confirm?alertId=${alert.id}&amount=25`}>
-                  <Button size="sm" variant="outline" className="w-full" data-testid={`button-buy-25-${alert.id}`}>
-                    Buy $25
+                <Link href={`/trade/confirm?alertId=${alert.id}&amount=${largerAmount}`}>
+                  <Button size="sm" variant="outline" className="w-full" data-testid={`button-buy-${largerAmount}-${alert.id}`}>
+                    Buy ${largerAmount}
                   </Button>
                 </Link>
               </>
@@ -119,9 +120,14 @@ function AlertCard({ alert }: { alert: any }) {
 }
 
 export default function Alerts() {
-  const { data: alerts, isLoading } = useQuery({
+  const { data: alerts, isLoading } = useQuery<any[]>({
     queryKey: ["/api/alerts"],
   });
+
+  const { data: profile } = useQuery<{ defaultBuyAmountUsd?: string }>({
+    queryKey: ["/api/user/profile"],
+  });
+  const defaultAmount = parseFloat(profile?.defaultBuyAmountUsd || "10");
 
   const pendingAlerts = alerts?.filter((a: any) => a.status === "SENT") || [];
   const executedAlerts = alerts?.filter((a: any) => a.status === "EXECUTED") || [];
@@ -157,7 +163,7 @@ export default function Alerts() {
             ) : pendingAlerts.length > 0 ? (
               <div className="space-y-4">
                 {pendingAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
+                  <AlertCard key={alert.id} alert={alert} defaultAmount={defaultAmount} />
                 ))}
               </div>
             ) : (
@@ -183,7 +189,7 @@ export default function Alerts() {
             ) : executedAlerts.length > 0 ? (
               <div className="space-y-4">
                 {executedAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
+                  <AlertCard key={alert.id} alert={alert} defaultAmount={defaultAmount} />
                 ))}
               </div>
             ) : (
@@ -209,7 +215,7 @@ export default function Alerts() {
             ) : allAlerts.length > 0 ? (
               <div className="space-y-4">
                 {allAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
+                  <AlertCard key={alert.id} alert={alert} defaultAmount={defaultAmount} />
                 ))}
               </div>
             ) : (

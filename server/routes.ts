@@ -10,8 +10,11 @@ import { tweetProvider } from "./services/tweetProvider";
 import { classifyTweet, shouldCreateAlert } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
+import * as trading from "./services/trading";
+import * as telegramBot from "./services/telegramBot";
 import * as privyService from "./services/privy";
 import { pollInfluencerTweets, sendBackfillAlerts } from "./workers";
+import type { AssetRegistryEntry } from "@shared/schema";
 
 const privy = new PrivyClient(
   process.env.PRIVY_APP_ID!,
@@ -115,6 +118,23 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
     console.error("[Auth] Error:", error);
     return res.status(401).json({ error: "Invalid token" });
   }
+}
+
+// Resolve the asset to trade from either an explicit ticker or a user alert id.
+async function resolveTradableAsset(ticker?: string, alertId?: string | number): Promise<AssetRegistryEntry | null> {
+  let symbol = typeof ticker === "string" && ticker.trim() ? ticker.trim().toUpperCase() : null;
+
+  if (!symbol && alertId != null && alertId !== "") {
+    const userAlert = await storage.getUserAlert(parseInt(String(alertId)));
+    if (!userAlert) return null;
+    const alertEvent = await storage.getAlertEvent(userAlert.alertEventId);
+    if (!alertEvent) return null;
+    symbol = alertEvent.ticker;
+  }
+
+  if (!symbol) return null;
+  const asset = await storage.getAssetByTicker(symbol);
+  return asset && asset.isActive ? asset : null;
 }
 
 async function adminMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -704,36 +724,13 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Wallet not connected" });
       }
 
-      let outputMint: string | undefined;
-      let outputSymbol: string | undefined;
-
-      if (ticker) {
-        const asset = await storage.getAssetByTicker(ticker);
-        if (!asset || !asset.isActive) {
-          return res.status(400).json({ error: "Asset not available for trading" });
-        }
-        outputMint = asset.solanaMint;
-        outputSymbol = asset.ondoSymbol;
-      } else if (alertId) {
-        const userAlert = await storage.getUserAlert(parseInt(alertId));
-        if (!userAlert) {
-          return res.status(404).json({ error: "Alert not found" });
-        }
-        const alertEvent = await storage.getAlertEvent(userAlert.alertEventId);
-        if (!alertEvent) {
-          return res.status(404).json({ error: "Alert event not found" });
-        }
-        const asset = await storage.getAssetByTicker(alertEvent.ticker);
-        if (!asset || !asset.isActive) {
-          return res.status(400).json({ error: "Asset not available for trading" });
-        }
-        outputMint = asset.solanaMint;
-        outputSymbol = asset.ondoSymbol;
+      const asset = await resolveTradableAsset(ticker, alertId);
+      if (!asset) {
+        return res.status(400).json({ error: "Asset not available for trading" });
       }
-
-      if (!outputMint) {
-        return res.status(400).json({ error: "No valid ticker or alert provided" });
-      }
+      const outputMint = asset.solanaMint;
+      const outputSymbol = asset.ondoSymbol;
+      const outputDecimals = asset.decimals || 9;
 
       const amountRaw = jupiter.usdToRawAmount(parseFloat(amount), 6);
       
@@ -752,7 +749,7 @@ export async function registerRoutes(
         status: "PENDING",
       });
 
-      const estimatedOutput = jupiter.rawAmountToDisplay(quote.outAmount, 6);
+      const estimatedOutput = jupiter.rawAmountToDisplay(quote.outAmount, outputDecimals);
       const priceImpact = parseFloat(quote.priceImpactPct);
 
       res.json({
@@ -839,7 +836,7 @@ export async function registerRoutes(
       
       res.json({
         ticker,
-        symbol: asset.symbol,
+        symbol: asset.ondoSymbol,
         inputMint: asset.solanaMint,
         outputMint: USDC_MINT,
         inputAmount: inputAmount.toFixed(6),
@@ -855,65 +852,31 @@ export async function registerRoutes(
     }
   });
 
-  // Sell tokens back to USDC
+  // Sell an entire position back to USDC
   app.post("/api/trade/sell", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { ticker, amount } = req.body;
-      
+      const { ticker } = req.body;
+
       if (!user.solanaPubkey || !user.privyWalletId) {
         return res.status(400).json({ error: "Wallet not configured for trading" });
       }
-      
+
       const asset = await storage.getAssetByTicker(ticker);
       if (!asset) {
         return res.status(404).json({ error: `Asset ${ticker} not found` });
       }
-      
-      // Get actual token balance from chain
-      const tokenBalance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-      if (tokenBalance.balance === "0") {
-        return res.status(400).json({ error: `No ${ticker} balance to sell` });
-      }
-      
-      console.log(`[Sell] Getting quote to sell ${tokenBalance.balance} raw of ${ticker}`);
-      
-      const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, tokenBalance.balance, user.solanaPubkey);
-      
-      if (!quote.transaction || !quote.requestId) {
-        return res.status(400).json({ error: "Failed to get quote" });
-      }
-      
-      // Sign and execute
-      const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
-      
-      if ("error" in signResult) {
-        return res.status(400).json({ error: signResult.error });
-      }
-      
-      const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
-      
-      if (executeResult.status === "Success" && executeResult.signature) {
-        // Save trade
-        const trade = await storage.createTrade({
-          userId: user.id,
-          userAlertId: null,
-          preparedOrderId: null,
-          txSig: executeResult.signature,
-          inputMint: asset.solanaMint,
-          outputMint: USDC_MINT,
-          amountIn: tokenBalance.balance,
-          amountOut: executeResult.outputAmountResult,
-          status: "COMPLETED",
-        });
-        
-        res.json({ success: true, signature: executeResult.signature, trade });
-      } else {
-        res.status(400).json({ error: executeResult.error || "Trade failed" });
-      }
+
+      const result = await trading.sellEntirePosition(user, asset);
+      res.json({
+        success: true,
+        signature: result.signature,
+        tokensSold: result.tokensSold,
+        usdcReceived: result.usdcReceived,
+      });
     } catch (error: any) {
       console.error("[API] Sell trade error:", error);
-      res.status(500).json({ error: error.message || "Failed to execute sell" });
+      res.status(400).json({ error: trading.friendlyTradeError(error) });
     }
   });
 
@@ -1139,728 +1102,139 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/telegram/webhook", async (req: Request, res: Response) => {
+  // Muted ticker management (used by Settings and the /mute bot command)
+  app.get("/api/muted-tickers", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const { message, callback_query } = req.body;
-      
-      console.log("[Telegram Webhook] Received:", JSON.stringify({ 
-        hasMessage: !!message, 
-        hasCallback: !!callback_query,
-        messageText: message?.text?.slice(0, 50),
-        callbackData: callback_query?.data 
-      }));
-
-      if (message?.text?.startsWith("/start ")) {
-        const token = message.text.split(" ")[1];
-        const linkToken = await storage.getTelegramLinkToken(token);
-        
-        if (linkToken && !linkToken.used && new Date(linkToken.expiresAt) > new Date()) {
-          await storage.updateUser(linkToken.userId, {
-            telegramChatId: message.chat.id.toString(),
-            telegramUsername: message.from?.username,
-          });
-          await storage.markTelegramLinkTokenUsed(linkToken.id);
-          
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "✅ Successfully connected! You'll now receive trading alerts here.",
-          });
-        } else {
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "❌ Invalid or expired link. Please try again from the app.",
-          });
-        }
-      }
-
-      if (message?.text === "/start") {
-        await telegram.sendMessage({
-          chatId: message.chat.id.toString(),
-          text: "Welcome to Arena! To connect your account, please use the link from the app.",
-        });
-      }
-
-      if (message?.text === "/help") {
-        await telegram.sendMessage({
-          chatId: message.chat.id.toString(),
-          text: `📊 <b>Arena Bot Commands</b>
-
-/help - Show this message
-/balance - Show your wallet balance
-/portfolio - Show your holdings and trade history
-/sell - Sell stock tokens (shows selection menu)
-/mute TICKER - Mute alerts for a ticker
-/unmute TICKER - Unmute alerts for a ticker
-/amount NUMBER - Set default buy amount (e.g., /amount 50)`,
-          parseMode: "HTML",
-        });
-      }
-      
-      // Handle /sell command - show stock selection menu or sell specific ticker
-      if (message?.text === "/sell" || message?.text?.startsWith("/sell ")) {
-        const chatId = message.chat.id.toString();
-        const ticker = message.text.split(" ")[1]?.toUpperCase();
-        
-        const user = await storage.getUserByTelegramChatId(chatId);
-        if (!user || !user.solanaPubkey || !user.privyWalletId) {
-          await telegram.sendMessage({
-            chatId,
-            text: "❌ Wallet not configured. Please set up one-tap trading in the app first.",
-          });
-          return res.sendStatus(200);
-        }
-        
-        // If no ticker specified, show stock selection menu
-        if (!ticker) {
-          try {
-            const pubkey = new PublicKey(user.solanaPubkey);
-            const assets = await storage.getAssetRegistry();
-            const assetsByMint = new Map(assets.map(a => [a.solanaMint, a]));
-            const holdings: { ticker: string; balance: string; mint: string }[] = [];
-            
-            const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-            const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-            
-            const processAccounts = (accounts: any[]) => {
-              for (const { account } of accounts) {
-                const info = account.data.parsed.info;
-                const mint = info.mint;
-                const asset = assetsByMint.get(mint);
-                
-                if (asset && asset.underlyingTicker !== "USDC" && parseFloat(info.tokenAmount.uiAmountString) > 0) {
-                  holdings.push({
-                    ticker: asset.underlyingTicker,
-                    balance: parseFloat(info.tokenAmount.uiAmountString).toFixed(6),
-                    mint: mint
-                  });
-                }
-              }
-            };
-            
-            try {
-              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM });
-              processAccounts(tokenAccounts.value);
-            } catch (e) {}
-            
-            try {
-              const token2022Accounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_2022_PROGRAM });
-              processAccounts(token2022Accounts.value);
-            } catch (e) {}
-            
-            if (holdings.length === 0) {
-              await telegram.sendMessage({
-                chatId,
-                text: "📊 You don't have any stock tokens to sell.\n\nBuy some first by responding to an alert!",
-              });
-              return res.sendStatus(200);
-            }
-            
-            const buttons = holdings.map(h => ([
-              { text: `${h.ticker} (${h.balance})`, callback_data: `sell_stock:${h.ticker}` }
-            ]));
-            buttons.push([{ text: "❌ Cancel", callback_data: "sell_cancel" }]);
-            
-            await telegram.sendMessage({
-              chatId,
-              text: "📈 <b>Select a stock to sell:</b>\n\nTap a stock below to sell your entire position.",
-              parseMode: "HTML",
-              replyMarkup: { inline_keyboard: buttons },
-            });
-            return res.sendStatus(200);
-          } catch (err: any) {
-            console.error("[Telegram] Error fetching holdings:", err);
-            await telegram.sendMessage({
-              chatId,
-              text: "❌ Error fetching your holdings. Please try again.",
-            });
-            return res.sendStatus(200);
-          }
-        }
-        
-        const asset = await storage.getAssetByTicker(ticker);
-        if (!asset) {
-          await telegram.sendMessage({
-            chatId,
-            text: `❌ Unknown ticker: ${ticker}`,
-          });
-          return res.sendStatus(200);
-        }
-        
-        await telegram.sendMessage({
-          chatId,
-          text: `⏳ Getting your ${ticker} balance and preparing sale...`,
-        });
-        
-        try {
-          // Get token balance
-          const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-          const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
-          
-          if (parseFloat(displayBalance) === 0) {
-            await telegram.sendMessage({
-              chatId,
-              text: `❌ You don't have any ${ticker} tokens to sell.`,
-            });
-            return res.sendStatus(200);
-          }
-          
-          await telegram.sendMessage({
-            chatId,
-            text: `📊 Found ${displayBalance} ${ticker}. Selling to USDC...`,
-          });
-          
-          // Get quote and execute
-          const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, balance.balance, user.solanaPubkey);
-          
-          if (!quote.transaction || !quote.requestId) {
-            await telegram.sendMessage({
-              chatId,
-              text: `❌ Failed to get quote. Market may be unavailable.`,
-            });
-            return res.sendStatus(200);
-          }
-          
-          const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
-          
-          if ("error" in signResult) {
-            await telegram.sendMessage({
-              chatId,
-              text: `❌ Signing failed: ${signResult.error}`,
-            });
-            return res.sendStatus(200);
-          }
-          
-          const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
-          
-          if (executeResult.status === "Success" && executeResult.signature) {
-            const outputAmount = jupiter.rawAmountToDisplay(executeResult.outputAmountResult || "0", 6);
-            
-            await storage.createTrade({
-              userId: user.id,
-              userAlertId: null,
-              preparedOrderId: null,
-              txSig: executeResult.signature,
-              inputMint: asset.solanaMint,
-              outputMint: USDC_MINT,
-              amountIn: balance.balance,
-              amountOut: executeResult.outputAmountResult,
-              status: "COMPLETED",
-            });
-            
-            await telegram.sendMessage({
-              chatId,
-              text: `✅ <b>Sold ${displayBalance} ${ticker}!</b>\n\nReceived: $${outputAmount} USDC\n\n<a href="https://explorer.solana.com/tx/${executeResult.signature}">View Transaction</a>`,
-              parseMode: "HTML",
-            });
-          } else {
-            await telegram.sendMessage({
-              chatId,
-              text: `❌ Trade failed: ${executeResult.error || "Unknown error"}`,
-            });
-          }
-        } catch (err: any) {
-          console.error("[Telegram] Sell error:", err);
-          await telegram.sendMessage({
-            chatId,
-            text: `❌ Error: ${err.message || "Unknown error"}`,
-          });
-        }
-      }
-
-      if (message?.text === "/balance" || message?.text === "/portfolio") {
-        const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
-        
-        if (!user) {
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "❌ Please connect your account first using the link from the app.",
-          });
-        } else if (!user.solanaPubkey) {
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "❌ No wallet connected. Please connect a Solana wallet in the app first.",
-          });
-        } else {
-          try {
-            const pubkey = new PublicKey(user.solanaPubkey);
-            
-            const solBalance = await connection.getBalance(pubkey);
-            const solAmount = (solBalance / 1e9).toFixed(4);
-            
-            let usdcBalance = "0.00";
-            try {
-              const usdcMint = new PublicKey(USDC_MINT);
-              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { mint: usdcMint });
-              if (tokenAccounts.value.length > 0) {
-                const balance = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
-                usdcBalance = balance?.toFixed(2) || "0.00";
-              }
-            } catch (e) {
-              console.error("[Telegram] Error fetching USDC balance:", e);
-            }
-
-            // Fetch all token holdings - check both Token and Token-2022 programs
-            const assets = await storage.getAssetRegistry();
-            const assetsByMint = new Map(assets.map(a => [a.solanaMint, a]));
-            const holdings: { ticker: string; balance: string }[] = [];
-            
-            const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-            const TOKEN_2022_PROGRAM = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-            
-            const processAccounts = (accounts: any[]) => {
-              for (const { account } of accounts) {
-                const info = account.data.parsed.info;
-                const mint = info.mint;
-                const asset = assetsByMint.get(mint);
-                
-                if (asset && asset.underlyingTicker !== "USDC" && parseFloat(info.tokenAmount.uiAmountString) > 0) {
-                  holdings.push({
-                    ticker: asset.underlyingTicker,
-                    balance: parseFloat(info.tokenAmount.uiAmountString).toFixed(2)
-                  });
-                }
-              }
-            };
-            
-            try {
-              // Check regular Token program
-              const tokenAccounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_PROGRAM });
-              processAccounts(tokenAccounts.value);
-            } catch (e) {
-              console.error("[Telegram] Error fetching Token accounts:", e);
-            }
-            
-            try {
-              // Check Token-2022 program (Ondo tokens may use this)
-              const token2022Accounts = await connection.getParsedTokenAccountsByOwner(pubkey, { programId: TOKEN_2022_PROGRAM });
-              processAccounts(token2022Accounts.value);
-            } catch (e) {
-              console.error("[Telegram] Error fetching Token-2022 accounts:", e);
-            }
-
-            const trades = await storage.getTradesByUser(user.id);
-            const recentTrades = trades.slice(0, 5);
-
-            let portfolioText = `💰 <b>Your Wallet Balance</b>
-
-🟣 SOL: ${solAmount}
-💵 USDC: $${usdcBalance}`;
-
-            if (holdings.length > 0) {
-              portfolioText += `\n\n📊 <b>Stock Tokens</b>`;
-              for (const h of holdings) {
-                portfolioText += `\n• ${h.ticker}: ${h.balance}`;
-              }
-            }
-
-            portfolioText += `\n\n📍 Wallet: <code>${user.solanaPubkey.slice(0, 8)}...${user.solanaPubkey.slice(-6)}</code>`;
-
-            if (message?.text === "/portfolio") {
-              if (recentTrades.length > 0) {
-                portfolioText += `\n\n📈 <b>Recent Trades</b>`;
-                const allAssets = await storage.getAssetRegistry();
-                const assetByMint = new Map(allAssets.map(a => [a.solanaMint, a]));
-                
-                for (const trade of recentTrades) {
-                  const date = new Date(trade.createdAt!).toLocaleDateString();
-                  const inputAsset = assetByMint.get(trade.inputMint);
-                  const outputAsset = assetByMint.get(trade.outputMint);
-                  
-                  const inputSymbol = inputAsset?.underlyingTicker || (trade.inputMint === USDC_MINT ? "USDC" : trade.inputMint?.slice(0, 6) + "...");
-                  const outputSymbol = outputAsset?.underlyingTicker || (trade.outputMint === USDC_MINT ? "USDC" : trade.outputMint?.slice(0, 6) + "...");
-                  
-                  const inputAmount = trade.inputMint === USDC_MINT 
-                    ? `$${jupiter.rawAmountToDisplay(trade.amountIn || "0", 6)}`
-                    : jupiter.rawAmountToDisplay(trade.amountIn || "0", 9);
-                  const outputAmount = trade.outputMint === USDC_MINT 
-                    ? `$${jupiter.rawAmountToDisplay(trade.amountOut || "0", 6)}`
-                    : jupiter.rawAmountToDisplay(trade.amountOut || "0", 9);
-                  
-                  portfolioText += `\n• ${inputAmount} ${inputSymbol} → ${outputAmount} ${outputSymbol} (${date})`;
-                }
-              } else {
-                portfolioText += `\n\n📈 <b>Recent Trades</b>\nNo trades yet.`;
-              }
-            }
-
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: portfolioText,
-              parseMode: "HTML",
-            });
-          } catch (error) {
-            console.error("[Telegram] Balance fetch error:", error);
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: "❌ Error fetching balance. Please try again later.",
-            });
-          }
-        }
-      }
-
-      // Handle /trades command - show recent trades only
-      if (message?.text === "/trades") {
-        const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
-        
-        if (!user) {
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "Please connect your account first using the link from the app.",
-          });
-        } else {
-          const trades = await storage.getTradesByUser(user.id);
-          const recentTrades = trades.slice(0, 10);
-          
-          if (recentTrades.length === 0) {
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: "No trades yet. Execute your first trade from an alert!",
-            });
-          } else {
-            const allAssets = await storage.getAssetRegistry();
-            const assetByMint = new Map(allAssets.map(a => [a.solanaMint, a]));
-            
-            let tradesText = `<b>Recent Trades</b>\n`;
-            
-            for (const trade of recentTrades) {
-              const date = new Date(trade.createdAt!).toLocaleDateString();
-              const inputAsset = assetByMint.get(trade.inputMint);
-              const outputAsset = assetByMint.get(trade.outputMint);
-              
-              const inputSymbol = inputAsset?.underlyingTicker || (trade.inputMint === USDC_MINT ? "USDC" : trade.inputMint?.slice(0, 6) + "...");
-              const outputSymbol = outputAsset?.underlyingTicker || (trade.outputMint === USDC_MINT ? "USDC" : trade.outputMint?.slice(0, 6) + "...");
-              
-              const inputAmount = trade.inputMint === USDC_MINT 
-                ? `$${jupiter.rawAmountToDisplay(trade.amountIn || "0", 6)}`
-                : jupiter.rawAmountToDisplay(trade.amountIn || "0", 9);
-              const outputAmount = trade.outputMint === USDC_MINT 
-                ? `$${jupiter.rawAmountToDisplay(trade.amountOut || "0", 6)}`
-                : jupiter.rawAmountToDisplay(trade.amountOut || "0", 9);
-              
-              const status = trade.status === "completed" ? "Done" : trade.status === "failed" ? "Fail" : trade.status;
-              tradesText += `\n${inputAmount} ${inputSymbol} -> ${outputAmount} ${outputSymbol} (${date}) [${status}]`;
-            }
-            
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: tradesText,
-              parseMode: "HTML",
-            });
-          }
-        }
-      }
-
-      if (message?.text?.startsWith("/amount ")) {
-        const amountStr = message.text.split(" ")[1];
-        const amount = parseFloat(amountStr);
-        
-        if (isNaN(amount) || amount <= 0 || amount > 10000) {
-          await telegram.sendMessage({
-            chatId: message.chat.id.toString(),
-            text: "❌ Please provide a valid amount between $1 and $10,000. Example: /amount 50",
-          });
-        } else {
-          const user = await storage.getUserByTelegramChatId(message.chat.id.toString());
-          if (user) {
-            await storage.updateUser(user.id, { defaultBuyAmountUsd: amount.toString() });
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: `✅ Default trade amount set to $${amount}. Your quick-trade buttons will now show this amount.`,
-            });
-          } else {
-            await telegram.sendMessage({
-              chatId: message.chat.id.toString(),
-              text: "❌ Please connect your account first using the link from the app.",
-            });
-          }
-        }
-      }
-
-      if (callback_query) {
-        await telegram.answerCallbackQuery(callback_query.id);
-        
-        const parts = callback_query.data.split(":");
-        const action = parts[0];
-        const userAlertId = parts[1];
-        const amount = parts[2];
-        const tradeAction = parts[3] || "BUY";
-        
-        if (action === "trade") {
-          const actionText = tradeAction === "SELL" ? "Sell" : "Buy";
-          const chatId = callback_query.message.chat.id.toString();
-          const messageId = callback_query.message.message_id;
-          
-          try {
-            const userAlert = await storage.getUserAlert(parseInt(userAlertId));
-            if (!userAlert) throw new Error("Alert not found");
-            
-            const alertEvent = await storage.getAlertEvent(userAlert.alertEventId);
-            if (!alertEvent) throw new Error("Alert event not found");
-            
-            const user = await storage.getUser(userAlert.userId);
-            if (!user?.solanaPubkey) throw new Error("No wallet connected");
-            
-            const asset = await storage.getAssetByTicker(alertEvent.ticker);
-            if (!asset) throw new Error("Asset not found");
-            
-            const canAutoExecute = user.signerEnabled && 
-                                   user.autoExecuteEnabled && 
-                                   user.privyWalletId &&
-                                   privyService.isAuthorizationKeyConfigured();
-            
-            console.log("[Trade] canAutoExecute:", canAutoExecute, {
-              signerEnabled: user.signerEnabled,
-              autoExecuteEnabled: user.autoExecuteEnabled,
-              privyWalletId: user.privyWalletId,
-              authKeyConfigured: privyService.isAuthorizationKeyConfigured()
-            });
-            
-            if (canAutoExecute) {
-              await telegram.editMessageText(
-                chatId,
-                messageId,
-                `${callback_query.message.text}\n\n⚡ Executing ${actionText.toLowerCase()} for $${amount}...`,
-              );
-            } else {
-              await telegram.editMessageText(
-                chatId,
-                messageId,
-                `${callback_query.message.text}\n\n⏳ Preparing ${actionText.toLowerCase()} for $${amount}...`,
-              );
-            }
-            
-            const amountUsd = parseFloat(amount);
-            const amountRaw = jupiter.usdToRawAmount(amountUsd);
-            
-            let inputMint: string, outputMint: string;
-            if (tradeAction === "BUY") {
-              inputMint = USDC_MINT;
-              outputMint = asset.solanaMint;
-            } else {
-              inputMint = asset.solanaMint;
-              outputMint = USDC_MINT;
-            }
-            
-            const quote = await jupiter.getQuote(inputMint, outputMint, amountRaw, user.solanaPubkey);
-            
-            const preparedOrder = await storage.createPreparedOrder({
-              userId: user.id,
-              userAlertId: parseInt(userAlertId),
-              inputMint,
-              outputMint,
-              amountIn: amountRaw,
-              quoteJson: quote,
-              swapTxBase64: quote.transaction || undefined,
-              expiresAt: new Date(Date.now() + 60000),
-              status: "PENDING",
-            });
-            
-            if (canAutoExecute && user.privyWalletId) {
-              // Ultra API flow with retry: Get quote, sign, execute - retry with fresh quote on failure
-              const maxTradeAttempts = 3;
-              let lastError: string = "Unknown error";
-              let signature: string | null = null;
-              let outputAmountResult: string | null = null;
-              
-              for (let attempt = 1; attempt <= maxTradeAttempts; attempt++) {
-                console.log(`[Trade] Attempt ${attempt}/${maxTradeAttempts}`);
-                
-                try {
-                  // Get fresh quote for each attempt
-                  const freshQuote = attempt === 1 ? quote : await jupiter.getQuote(
-                    inputMint, outputMint, amountRaw, user.solanaPubkey!
-                  );
-                  
-                  if (!freshQuote.transaction || !freshQuote.requestId) {
-                    throw new Error("No transaction in quote");
-                  }
-                  
-                  // Sign transaction
-                  const signResult = await privyService.signSolanaTransaction(
-                    user.privyWalletId!,
-                    freshQuote.transaction
-                  );
-                  
-                  if ("error" in signResult) {
-                    throw new Error(signResult.error);
-                  }
-                  
-                  // Execute (this has its own internal retry for -2005 errors)
-                  const executeResult = await jupiter.executeUltraOrder(
-                    freshQuote.requestId,
-                    signResult.signedTransaction,
-                    1 // Only 1 internal retry, we handle outer retry with fresh quote
-                  );
-                  
-                  console.log("[Trade] Jupiter execute result:", executeResult);
-                  
-                  if (executeResult.status === "Success" || executeResult.signature) {
-                    signature = executeResult.signature || "";
-                    outputAmountResult = executeResult.outputAmountResult || null;
-                    break; // Success!
-                  }
-                  
-                  lastError = executeResult.error || "Trade execution failed";
-                  console.log(`[Trade] Attempt ${attempt} failed: ${lastError}`);
-                  
-                  if (attempt < maxTradeAttempts) {
-                    console.log(`[Trade] Retrying with fresh quote in ${attempt}s...`);
-                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-                  }
-                } catch (err: any) {
-                  lastError = err.message || "Unknown error";
-                  console.log(`[Trade] Attempt ${attempt} threw error: ${lastError}`);
-                  
-                  if (attempt < maxTradeAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-                  }
-                }
-              }
-              
-              if (signature) {
-                const trade = await storage.createTrade({
-                  userId: user.id,
-                  userAlertId: parseInt(userAlertId),
-                  preparedOrderId: preparedOrder.id,
-                  txSig: signature,
-                  inputMint,
-                  outputMint,
-                  amountIn: amountRaw,
-                  amountOut: outputAmountResult,
-                  status: "COMPLETED",
-                });
-                
-                await storage.updatePreparedOrder(preparedOrder.id, { status: "EXECUTED" });
-                await storage.updateUserAlert(parseInt(userAlertId), { status: "EXECUTED" });
-                
-                const explorerUrl = `https://solscan.io/tx/${signature}`;
-                await telegram.editMessageText(
-                  chatId,
-                  messageId,
-                  `${callback_query.message.text}\n\n✅ Trade executed!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${explorerUrl}">View on Solscan</a>`,
-                );
-              } else {
-                throw new Error(lastError);
-              }
-            } else {
-              const appUrl = process.env.REPLIT_DEV_DOMAIN 
-                ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-                : `${req.protocol}://${req.get("host")}`;
-              
-              await telegram.editMessageText(
-                chatId,
-                messageId,
-                `${callback_query.message.text}\n\n✅ Order prepared!\n\n💰 ${actionText} $${amount} of $${alertEvent.ticker}\n\n<a href="${appUrl}/trade/execute?orderId=${preparedOrder.id}">Tap to sign & execute</a>`,
-              );
-              
-              await storage.updateUserAlert(parseInt(userAlertId), { status: "PREPARED" });
-            }
-          } catch (error: any) {
-            console.error("[Telegram] Trade error:", error);
-            await telegram.editMessageText(
-              chatId,
-              messageId,
-              `${callback_query.message.text}\n\n❌ Failed: ${error.message || "Unknown error"}`,
-            );
-          }
-        }
-        
-        if (action === "ignore") {
-          await storage.updateUserAlert(parseInt(userAlertId), { status: "IGNORED" });
-          await telegram.editMessageText(
-            callback_query.message.chat.id.toString(),
-            callback_query.message.message_id,
-            `${callback_query.message.text}\n\n❌ Alert ignored`,
-          );
-        }
-        
-        if (action === "sell_stock") {
-          const ticker = userAlertId; // In this case, parts[1] is the ticker
-          const chatId = callback_query.message.chat.id.toString();
-          const messageId = callback_query.message.message_id;
-          
-          const user = await storage.getUserByTelegramChatId(chatId);
-          if (!user || !user.solanaPubkey || !user.privyWalletId) {
-            await telegram.editMessageText(chatId, messageId, "❌ Wallet not configured.");
-            return res.sendStatus(200);
-          }
-          
-          const asset = await storage.getAssetByTicker(ticker);
-          if (!asset) {
-            await telegram.editMessageText(chatId, messageId, `❌ Unknown ticker: ${ticker}`);
-            return res.sendStatus(200);
-          }
-          
-          await telegram.editMessageText(chatId, messageId, `⏳ Selling your ${ticker} position...`);
-          
-          try {
-            const balance = await jupiter.getTokenBalance(connection, user.solanaPubkey, asset.solanaMint);
-            const displayBalance = jupiter.rawAmountToDisplay(balance.balance, balance.decimals);
-            
-            if (parseFloat(displayBalance) === 0) {
-              await telegram.editMessageText(chatId, messageId, `❌ You don't have any ${ticker} tokens to sell.`);
-              return res.sendStatus(200);
-            }
-            
-            const quote = await jupiter.getQuote(asset.solanaMint, USDC_MINT, balance.balance, user.solanaPubkey);
-            
-            if (!quote.transaction || !quote.requestId) {
-              await telegram.editMessageText(chatId, messageId, `❌ Failed to get quote. Market may be unavailable.`);
-              return res.sendStatus(200);
-            }
-            
-            const signResult = await privyService.signSolanaTransaction(user.privyWalletId, quote.transaction);
-            
-            if ("error" in signResult) {
-              await telegram.editMessageText(chatId, messageId, `❌ Signing failed: ${signResult.error}`);
-              return res.sendStatus(200);
-            }
-            
-            const executeResult = await jupiter.executeUltraOrder(quote.requestId, signResult.signedTransaction, 2);
-            
-            if (executeResult.status === "Success" && executeResult.signature) {
-              const outputAmount = jupiter.rawAmountToDisplay(executeResult.outputAmountResult || "0", 6);
-              
-              await storage.createTrade({
-                userId: user.id,
-                userAlertId: null,
-                preparedOrderId: null,
-                txSig: executeResult.signature,
-                inputMint: asset.solanaMint,
-                outputMint: USDC_MINT,
-                amountIn: balance.balance,
-                amountOut: executeResult.outputAmountResult,
-                status: "COMPLETED",
-              });
-              
-              await telegram.editMessageText(
-                chatId, 
-                messageId, 
-                `✅ <b>Sold ${displayBalance} ${ticker}!</b>\n\nReceived: $${outputAmount} USDC\n\n<a href="https://solscan.io/tx/${executeResult.signature}">View on Solscan</a>`
-              );
-            } else {
-              await telegram.editMessageText(chatId, messageId, `❌ Trade failed: ${executeResult.error || "Unknown error"}`);
-            }
-          } catch (err: any) {
-            console.error("[Telegram] Sell callback error:", err);
-            await telegram.editMessageText(chatId, messageId, `❌ Error: ${err.message || "Unknown error"}`);
-          }
-        }
-        
-        if (action === "sell_cancel") {
-          await telegram.editMessageText(
-            callback_query.message.chat.id.toString(),
-            callback_query.message.message_id,
-            "❌ Sell cancelled."
-          );
-        }
-      }
-
-      res.status(200).send("OK");
+      const user = (req as any).user;
+      const muted = await storage.getMutedTickers(user.id);
+      res.json(muted);
     } catch (error) {
-      console.error("[Telegram] Webhook error:", error);
-      res.status(200).send("OK");
+      console.error("[API] Get muted tickers error:", error);
+      res.status(500).json({ error: "Failed to get muted tickers" });
     }
+  });
+
+  app.post("/api/muted-tickers", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const ticker = typeof req.body?.ticker === "string" ? req.body.ticker.toUpperCase().replace(/^\$/, "").trim() : "";
+      if (!ticker || ticker.length > 10) {
+        return res.status(400).json({ error: "Invalid ticker" });
+      }
+      const muted = await storage.getMutedTickers(user.id);
+      if (muted.some((m) => m.ticker === ticker)) {
+        return res.status(400).json({ error: `$${ticker} is already muted` });
+      }
+      const created = await storage.muteTicker(user.id, ticker);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("[API] Mute ticker error:", error);
+      res.status(500).json({ error: "Failed to mute ticker" });
+    }
+  });
+
+  app.delete("/api/muted-tickers/:ticker", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      await storage.unmuteTicker(user.id, req.params.ticker.toUpperCase());
+      res.status(204).send();
+    } catch (error) {
+      console.error("[API] Unmute ticker error:", error);
+      res.status(500).json({ error: "Failed to unmute ticker" });
+    }
+  });
+
+  // Live quote preview for the web trade page (no order is created)
+  app.post("/api/trade/quote", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { alertId, ticker, amount } = req.body;
+
+      if (!user.solanaPubkey) {
+        return res.status(400).json({ error: "Wallet not connected" });
+      }
+
+      const amountUsd = parseFloat(amount);
+      if (isNaN(amountUsd) || amountUsd <= 0 || amountUsd > 10000) {
+        return res.status(400).json({ error: "Enter an amount between $1 and $10,000" });
+      }
+
+      const asset = await resolveTradableAsset(ticker, alertId);
+      if (!asset) {
+        return res.status(400).json({ error: "This stock isn't available for trading" });
+      }
+
+      const amountRaw = jupiter.usdToRawAmount(amountUsd);
+      const quote = await jupiter.getQuote(USDC_MINT, asset.solanaMint, amountRaw, user.solanaPubkey);
+      const decimals = asset.decimals || 9;
+      const estimatedOutput = parseFloat(quote.outAmount) / Math.pow(10, decimals);
+
+      res.json({
+        ticker: asset.underlyingTicker,
+        outputSymbol: asset.ondoSymbol,
+        estimatedOutput: estimatedOutput.toFixed(4),
+        pricePerShare: estimatedOutput > 0 ? (amountUsd / estimatedOutput).toFixed(2) : null,
+        priceImpactPct: quote.priceImpactPct,
+      });
+    } catch (error: any) {
+      console.error("[API] Trade quote error:", error);
+      res.status(500).json({ error: trading.friendlyTradeError(error) });
+    }
+  });
+
+  // Execute a trade server-side via the user's session signer (same path Telegram uses)
+  app.post("/api/trade/execute-server", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const { alertId, ticker, amount, side } = req.body;
+
+      if (!user.signerEnabled || !user.privyWalletId) {
+        return res.status(400).json({ error: "One-tap trading isn't enabled. Enable it in Settings first." });
+      }
+
+      const asset = await resolveTradableAsset(ticker, alertId);
+      if (!asset) {
+        return res.status(400).json({ error: "This stock isn't available for trading" });
+      }
+
+      const userAlertId = alertId ? parseInt(alertId) : null;
+
+      if (side === "SELL") {
+        const result = await trading.sellEntirePosition(user, asset, userAlertId);
+        return res.json({
+          success: true,
+          signature: result.signature,
+          tokensSold: result.tokensSold,
+          usdcReceived: result.usdcReceived,
+          ticker: asset.underlyingTicker,
+        });
+      }
+
+      const amountUsd = parseFloat(amount);
+      if (isNaN(amountUsd) || amountUsd <= 0 || amountUsd > 10000) {
+        return res.status(400).json({ error: "Enter an amount between $1 and $10,000" });
+      }
+
+      const result = await trading.buyAsset(user, asset, amountUsd, userAlertId);
+      res.json({
+        success: true,
+        signature: result.signature,
+        tokensReceived: result.tokensReceived,
+        ticker: asset.underlyingTicker,
+      });
+    } catch (error: any) {
+      console.error("[API] Execute server trade error:", error);
+      res.status(400).json({ error: trading.friendlyTradeError(error) });
+    }
+  });
+
+  app.post("/api/telegram/webhook", (req: Request, res: Response) => {
+    // Ack immediately: Telegram redelivers updates that don't get a fast 200,
+    // and a redelivered trade callback would execute the trade twice.
+    res.status(200).send("OK");
+    telegramBot.handleTelegramUpdate(req.body).catch((error) => {
+      console.error("[Telegram] Webhook error:", error);
+    });
   });
 
   app.get("/api/admin/assets", authMiddleware, async (req: Request, res: Response) => {
