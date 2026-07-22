@@ -14,6 +14,7 @@ export const users = pgTable("users", {
   telegramChatId: text("telegram_chat_id"),
   telegramUsername: text("telegram_username"),
   defaultBuyAmountUsd: decimal("default_buy_amount_usd", { precision: 10, scale: 2 }).default("10"),
+  dailySpendCapUsd: decimal("daily_spend_cap_usd", { precision: 10, scale: 2 }),
   autoExecuteEnabled: boolean("auto_execute_enabled").default(false),
   onboardingCompleted: boolean("onboarding_completed").default(false),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
@@ -70,6 +71,7 @@ export const alertEvents = pgTable("alert_events", {
   sentiment: text("sentiment").notNull(),
   action: text("action").notNull(),
   confidence: decimal("confidence", { precision: 3, scale: 2 }),
+  priceUsdAtEvent: decimal("price_usd_at_event", { precision: 18, scale: 8 }),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
@@ -107,6 +109,7 @@ export const trades = pgTable("trades", {
   amountIn: text("amount_in").notNull(),
   amountOut: text("amount_out"),
   status: text("status").default("PENDING").notNull(),
+  performanceNotifiedAt: timestamp("performance_notified_at"),
   createdAt: timestamp("created_at").default(sql`CURRENT_TIMESTAMP`).notNull(),
 });
 
@@ -235,7 +238,7 @@ export const classificationResultSchema = z.object({
   is_actionable: z.boolean(),
   tickers: z.array(z.object({
     symbol: z.string(),
-    sentiment: z.enum(["BULLISH", "BEARISH"]),
+    sentiment: z.enum(["BULLISH", "BEARISH", "NEUTRAL"]),
     action: z.enum(["BUY", "SELL", "NONE"]),
     confidence: z.number().min(0).max(1),
   })),

@@ -1,9 +1,10 @@
 import cron from "node-cron";
 import { storage } from "../storage";
 import { tweetProvider } from "../services/tweetProvider";
-import { classifyTweet, shouldCreateAlert } from "../services/classifier";
+import { classifyTweet, getAlertableTickers, getClassifierModel } from "../services/classifier";
 import * as telegram from "../services/telegram";
 import * as jupiter from "../services/jupiter";
+import * as prices from "../services/prices";
 import { Connection } from "@solana/web3.js";
 import type { ClassificationResult } from "@shared/schema";
 
@@ -237,42 +238,48 @@ async function classifyTweetsWorker() {
       try {
         const result = await classifyTweet(tweet.text);
 
-        await storage.createClassification({
+        const classification = await storage.createClassification({
           tweetId: tweet.id,
           isActionable: result.is_actionable,
           overallConfidence: result.overall_confidence.toString(),
           resultJson: result,
-          model: "gpt-5.1",
+          model: getClassifierModel(),
         });
 
-        console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable}`);
+        console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable} (${result.reason})`);
 
-        if (await shouldCreateAlert(result)) {
-          for (const ticker of result.tickers) {
-            const tickerSymbol = ticker.symbol;
-            const asset = await storage.getAssetByTicker(tickerSymbol);
-            if (!asset?.isActive) continue;
+        for (const ticker of getAlertableTickers(result)) {
+          const tickerSymbol = ticker.symbol;
+          const asset = await storage.getAssetByTicker(tickerSymbol);
+          if (!asset?.isActive) continue;
 
-            const classification = await storage.getClassificationByTweetId(tweet.id);
-            if (!classification) continue;
-
-            const alertEvent = await storage.createAlertEvent({
-              tweetId: tweet.id,
-              classificationId: classification.id,
-              ticker: tickerSymbol,
-              sentiment: ticker.sentiment || "NEUTRAL",
-              action: "NONE",
-              confidence: ticker.confidence?.toString() || "1.0",
-            });
-
-            console.log(`[Worker] Created alert event for $${tickerSymbol}`);
-
-            await sendAlertsForEvent(alertEvent.id, tweet, { 
-              symbol: tickerSymbol, 
-              action: "NONE", 
-              confidence: ticker.confidence || 1.0 
-            });
+          // Entry-price snapshot enables trader track records later
+          let priceUsdAtEvent: string | undefined;
+          try {
+            const price = await prices.getTokenPriceUsd(asset.solanaMint, asset.decimals);
+            if (price != null) priceUsdAtEvent = price.toFixed(8);
+          } catch (e) {
+            console.log(`[Worker] Price snapshot failed for ${tickerSymbol}:`, e);
           }
+
+          const alertEvent = await storage.createAlertEvent({
+            tweetId: tweet.id,
+            classificationId: classification.id,
+            ticker: tickerSymbol,
+            sentiment: ticker.sentiment,
+            action: ticker.action,
+            confidence: ticker.confidence.toString(),
+            priceUsdAtEvent,
+          });
+
+          console.log(`[Worker] Created alert event for $${tickerSymbol}: ${ticker.action} (${ticker.sentiment}, ${ticker.confidence})`);
+
+          await sendAlertsForEvent(alertEvent.id, tweet, {
+            symbol: tickerSymbol,
+            action: ticker.action,
+            confidence: ticker.confidence,
+            reason: result.reason,
+          });
         }
       } catch (error) {
         console.error(`[Worker] Error classifying tweet ${tweet.id}:`, error);
@@ -286,7 +293,7 @@ async function classifyTweetsWorker() {
 async function sendAlertsForEvent(
   alertEventId: number,
   tweet: any,
-  ticker: { symbol: string; action: string; confidence: number }
+  ticker: { symbol: string; action: string; confidence: number; reason?: string }
 ) {
   try {
     const influencer = await storage.getInfluencer(tweet.influencerId);
@@ -320,7 +327,8 @@ async function sendAlertsForEvent(
         ticker.confidence,
         tweet.text,
         tweet.url,
-        tweet.tweetCreatedAt || tweet.ingestedAt
+        tweet.tweetCreatedAt || tweet.ingestedAt,
+        ticker.reason
       );
 
       const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");
@@ -365,6 +373,73 @@ async function sendAlertsForEvent(
   }
 }
 
+// ~24h after a buy executes, tell the user how the trade is doing. This is
+// the retention loop: it proves signals work (or don't) with real numbers.
+async function tradePerformanceWorker() {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const dueTrades = await storage.getTradesForPerformanceCheck(cutoff);
+    if (dueTrades.length === 0) return;
+
+    console.log(`[Worker] Performance check for ${dueTrades.length} trade(s)`);
+    const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+    for (const trade of dueTrades) {
+      // Whatever happens below, never re-process this trade
+      await storage.updateTrade(trade.id, { performanceNotifiedAt: new Date() });
+
+      try {
+        const isBuy = trade.inputMint === USDC_MINT;
+        if (!isBuy || !trade.amountOut) continue;
+
+        const user = await storage.getUser(trade.userId);
+        if (!user?.telegramChatId) continue;
+
+        const asset = await storage.getAssetByMint(trade.outputMint);
+        if (!asset) continue;
+
+        const price = await prices.getTokenPriceUsd(asset.solanaMint, asset.decimals);
+        if (price == null) continue;
+
+        const entryUsd = parseInt(trade.amountIn) / 1e6;
+        const tokens = parseInt(trade.amountOut) / 10 ** asset.decimals;
+        if (!entryUsd || !tokens) continue;
+
+        const currentValue = tokens * price;
+        const pnlPct = ((currentValue - entryUsd) / entryUsd) * 100;
+        const sign = pnlPct >= 0 ? "+" : "";
+        const emoji = pnlPct >= 0 ? "📈" : "📉";
+
+        // Credit the trader whose call triggered the buy, when known
+        let sourceLine = "";
+        if (trade.userAlertId) {
+          const userAlert = await storage.getUserAlert(trade.userAlertId);
+          const alertEvent = userAlert ? await storage.getAlertEvent(userAlert.alertEventId) : null;
+          const tweet = alertEvent ? await storage.getTweet(alertEvent.tweetId) : null;
+          const influencer = tweet ? await storage.getInfluencer(tweet.influencerId) : null;
+          if (influencer) sourceLine = `\n👤 From @${influencer.handle}'s call`;
+        }
+
+        await telegram.sendMessage({
+          chatId: user.telegramChatId,
+          text: `${emoji} <b>24h check-in: $${asset.underlyingTicker}</b>\n\nYour $${entryUsd.toFixed(2)} buy is <b>${sign}${pnlPct.toFixed(1)}%</b> (now $${currentValue.toFixed(2)})${sourceLine}`,
+          replyMarkup: {
+            inline_keyboard: [[
+              { text: "📱 View portfolio", url: `${APP_URL}/portfolio` },
+            ]],
+          },
+        });
+
+        console.log(`[Worker] Sent performance follow-up for trade ${trade.id} (${sign}${pnlPct.toFixed(1)}%)`);
+      } catch (error) {
+        console.error(`[Worker] Performance follow-up error for trade ${trade.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error("[Worker] Trade performance worker error:", error);
+  }
+}
+
 async function setupTelegramWebhook() {
   // Only setup webhook in production to avoid dev overwriting production webhook
   const isProduction = process.env.NODE_ENV === "production" || !!process.env.REPLIT_DEPLOYMENT;
@@ -400,12 +475,17 @@ export function startWorkers() {
 
   setupTelegramWebhook();
 
-  cron.schedule("*/15 * * * *", pollTweetsWorker);
-  console.log("[Workers] Tweet poll job scheduled (every 15 minutes)");
+  const pollMinutes = Math.max(1, parseInt(process.env.TWEET_POLL_MINUTES || "15"));
+  cron.schedule(`*/${pollMinutes} * * * *`, pollTweetsWorker);
+  console.log(`[Workers] Tweet poll job scheduled (every ${pollMinutes} minutes)`);
 
   cron.schedule("*/1 * * * *", classifyTweetsWorker);
   console.log("[Workers] Classification job scheduled (every 1 minute)");
 
+  cron.schedule("0 * * * *", tradePerformanceWorker);
+  console.log("[Workers] Trade performance follow-up job scheduled (hourly)");
+
   pollTweetsWorker();
   setTimeout(classifyTweetsWorker, 30000);
+  setTimeout(tradePerformanceWorker, 60000);
 }

@@ -1,30 +1,26 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { usePrivy } from "@privy-io/react-auth";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { 
-  Wallet, 
-  TrendingUp, 
-  TrendingDown,
+import {
+  Wallet,
   ExternalLink,
   ArrowUpRight,
-  ArrowDownRight,
+  ArrowDownLeft,
   ArrowRight,
   Clock,
   Loader2,
-  DollarSign,
   Send,
   AlertCircle
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { SignalBadge } from "@/components/SignalBadge";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -40,6 +36,59 @@ interface SellQuote {
   priceImpactPct: string;
 }
 
+function shortAddress(addr?: string | null): string {
+  if (!addr) return "—";
+  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
+}
+
+function formatSignedUsd(value: number): string {
+  return value >= 0 ? `+$${value.toFixed(2)}` : `-$${Math.abs(value).toFixed(2)}`;
+}
+
+function StatusChip({ status }: { status: string }) {
+  const done = status === "COMPLETED";
+  const pending = status === "PENDING";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-wide ${
+        done
+          ? "border-bull/30 bg-bull/10 text-bull"
+          : pending
+            ? "border-border bg-muted/50 text-muted-foreground"
+            : "border-bear/30 bg-bear/10 text-bear"
+      }`}
+    >
+      {status}
+    </span>
+  );
+}
+
+function EmptyState({ icon: Icon, title, description }: { icon: any; title: string; description: string }) {
+  return (
+    <div className="text-center py-12">
+      <div className="w-12 h-12 mx-auto rounded-xl bg-muted flex items-center justify-center mb-4">
+        <Icon className="w-5 h-5 text-muted-foreground" />
+      </div>
+      <p className="font-medium">{title}</p>
+      <p className="text-sm text-muted-foreground mt-1">{description}</p>
+    </div>
+  );
+}
+
+function LoadingRows() {
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-16 w-full" />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Portfolio() {
   const { authenticated, ready } = usePrivy();
   const { toast } = useToast();
@@ -48,14 +97,14 @@ export default function Portfolio() {
   const [transferToken, setTransferToken] = useState<string>(USDC_MINT);
   const [transferRecipient, setTransferRecipient] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
-  
+
   // Sell confirmation dialog state
   const [sellDialogOpen, setSellDialogOpen] = useState(false);
   const [sellQuote, setSellQuote] = useState<SellQuote | null>(null);
   const [isLoadingQuote, setIsLoadingQuote] = useState(false);
-  
+
   const isReady = ready && authenticated;
-  
+
   const { data: portfolioData, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<{
     holdings: any[];
     usdcBalance: number;
@@ -77,7 +126,7 @@ export default function Portfolio() {
     enabled: isReady,
     staleTime: 0,
   });
-  
+
   // Refetch when auth becomes ready
   useEffect(() => {
     if (isReady) {
@@ -86,7 +135,7 @@ export default function Portfolio() {
       refetchTransfers();
     }
   }, [isReady]);
-  
+
   const holdings = portfolioData?.holdings || [];
   const usdcBalance = portfolioData?.usdcBalance || 0;
   const totalValue = portfolioData?.totalValue || 0;
@@ -127,10 +176,10 @@ export default function Portfolio() {
     setSellDialogOpen(true);
     setIsLoadingQuote(true);
     setSellQuote(null);
-    
+
     try {
       const data = await apiRequest("POST", "/api/trade/sell-quote", { ticker });
-      
+
       if (data.error) {
         toast({
           title: "Failed to get quote",
@@ -140,7 +189,7 @@ export default function Portfolio() {
         setSellDialogOpen(false);
         return;
       }
-      
+
       setSellQuote({
         ticker: data.ticker,
         symbol: data.symbol,
@@ -221,105 +270,149 @@ export default function Portfolio() {
 
   return (
     <AppLayout>
-      <div className="space-y-8">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold" data-testid="text-portfolio-title">Portfolio</h1>
-            <p className="text-muted-foreground mt-1">View your holdings and trade history</p>
-          </div>
-          <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-send-tokens">
-                <Send className="w-4 h-4 mr-2" />
-                Send Tokens
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Send Tokens</DialogTitle>
-                <DialogDescription>
-                  Transfer tokens to another Solana wallet address
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="token">Token</Label>
-                  <Select value={transferToken} onValueChange={setTransferToken}>
-                    <SelectTrigger data-testid="select-transfer-token">
-                      <SelectValue placeholder="Select token" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {transferableTokens.map((token) => (
-                        <SelectItem key={token.mint} value={token.mint} data-testid={`token-option-${token.symbol}`}>
-                          {token.symbol} (Balance: {typeof token.balance === 'number' ? token.balance.toFixed(token.symbol === 'USDC' ? 2 : 6) : token.balance})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="recipient">Recipient Address</Label>
-                  <Input
-                    id="recipient"
-                    placeholder="Enter Solana wallet address"
-                    value={transferRecipient}
-                    onChange={(e) => setTransferRecipient(e.target.value)}
-                    data-testid="input-recipient-address"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Amount</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="amount"
-                      type="number"
-                      placeholder="Enter amount"
-                      value={transferAmount}
-                      onChange={(e) => setTransferAmount(e.target.value)}
-                      data-testid="input-transfer-amount"
-                      className="flex-1"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const selectedToken = transferableTokens.find(t => t.mint === transferToken);
-                        if (selectedToken) {
-                          const maxAmount = selectedToken.symbol === 'USDC' 
-                            ? selectedToken.balance.toFixed(2)
-                            : selectedToken.balance.toFixed(6);
-                          setTransferAmount(maxAmount);
-                        }
-                      }}
-                      data-testid="button-max-amount"
-                    >
-                      Max
-                    </Button>
-                  </div>
-                </div>
+      <div className="space-y-6">
+        {/* Value hero strip */}
+        <div className="rise-in rounded-xl border border-card-border bg-gradient-to-br from-card to-background p-6 md:p-8 relative overflow-hidden">
+          <div className="absolute inset-0 bg-grid fade-grid opacity-40 pointer-events-none" />
+          <div className="relative flex flex-col md:flex-row md:items-end justify-between gap-6">
+            <div>
+              <p className="text-[11px] uppercase tracking-widest text-muted-foreground" data-testid="text-portfolio-title">
+                Portfolio value
+              </p>
+              {holdingsLoading ? (
+                <Skeleton className="h-12 w-48 mt-2" />
+              ) : (
+                <p className="text-num text-4xl md:text-5xl font-semibold mt-1" data-testid="text-total-value">
+                  ${totalValue.toFixed(2)}
+                </p>
+              )}
+              <p className="text-sm text-muted-foreground mt-2 flex items-center gap-2">
+                <Wallet className="w-3.5 h-3.5" />
+                <span className="text-num" data-testid="text-usdc-balance">
+                  ${usdcBalance.toFixed(2)}
+                </span>
+                USDC available to trade
+              </p>
+            </div>
+
+            <div className="flex items-end gap-6">
+              <div>
+                <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Assets</p>
+                {holdingsLoading ? (
+                  <Skeleton className="h-7 w-10 mt-1" />
+                ) : (
+                  <p className="text-num text-xl font-semibold mt-0.5" data-testid="text-asset-count">
+                    {holdings?.length || 0}
+                  </p>
+                )}
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setTransferDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button 
-                  onClick={handleTransfer} 
-                  disabled={transferMutation.isPending}
-                  data-testid="button-confirm-transfer"
-                >
-                  {transferMutation.isPending ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Sending...
-                    </>
-                  ) : (
-                    "Send"
-                  )}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              <div>
+                <p className="text-[11px] uppercase tracking-widest text-muted-foreground">Trades</p>
+                {tradesLoading ? (
+                  <Skeleton className="h-7 w-10 mt-1" />
+                ) : (
+                  <p className="text-num text-xl font-semibold mt-0.5" data-testid="text-trade-total">
+                    {trades?.length || 0}
+                  </p>
+                )}
+              </div>
+
+              <Dialog open={transferDialogOpen} onOpenChange={setTransferDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" data-testid="button-send-tokens">
+                    <Send className="w-4 h-4 mr-2" />
+                    Send tokens
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Send tokens</DialogTitle>
+                    <DialogDescription>
+                      Transfer tokens to another Solana wallet address
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="token" className="text-[11px] uppercase tracking-widest text-muted-foreground">Token</Label>
+                      <Select value={transferToken} onValueChange={setTransferToken}>
+                        <SelectTrigger data-testid="select-transfer-token">
+                          <SelectValue placeholder="Select token" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {transferableTokens.map((token) => (
+                            <SelectItem key={token.mint} value={token.mint} data-testid={`token-option-${token.symbol}`}>
+                              {token.symbol} (Balance: {typeof token.balance === 'number' ? token.balance.toFixed(token.symbol === 'USDC' ? 2 : 6) : token.balance})
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="recipient" className="text-[11px] uppercase tracking-widest text-muted-foreground">Recipient address</Label>
+                      <Input
+                        id="recipient"
+                        placeholder="Enter Solana wallet address"
+                        value={transferRecipient}
+                        onChange={(e) => setTransferRecipient(e.target.value)}
+                        className="font-mono text-sm"
+                        data-testid="input-recipient-address"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="amount" className="text-[11px] uppercase tracking-widest text-muted-foreground">Amount</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="amount"
+                          type="number"
+                          placeholder="Enter amount"
+                          value={transferAmount}
+                          onChange={(e) => setTransferAmount(e.target.value)}
+                          data-testid="input-transfer-amount"
+                          className="flex-1 text-num"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const selectedToken = transferableTokens.find(t => t.mint === transferToken);
+                            if (selectedToken) {
+                              const maxAmount = selectedToken.symbol === 'USDC'
+                                ? selectedToken.balance.toFixed(2)
+                                : selectedToken.balance.toFixed(6);
+                              setTransferAmount(maxAmount);
+                            }
+                          }}
+                          data-testid="button-max-amount"
+                        >
+                          Max
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setTransferDialogOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={handleTransfer}
+                      disabled={transferMutation.isPending}
+                      data-testid="button-confirm-transfer"
+                    >
+                      {transferMutation.isPending ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        "Send"
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+          </div>
         </div>
 
         {/* Sell Confirmation Dialog */}
@@ -331,12 +424,12 @@ export default function Portfolio() {
         }}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Confirm Sell</DialogTitle>
+              <DialogTitle>Confirm sell</DialogTitle>
               <DialogDescription>
                 Review your swap details before confirming
               </DialogDescription>
             </DialogHeader>
-            
+
             {isLoadingQuote ? (
               <div className="py-8 flex flex-col items-center justify-center gap-4">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -345,17 +438,17 @@ export default function Portfolio() {
             ) : sellQuote ? (
               <div className="space-y-6 py-4">
                 {/* Swap Preview */}
-                <div className="flex items-center justify-between gap-4 p-4 rounded-lg bg-muted/50">
+                <div className="flex items-center justify-between gap-4 p-4 rounded-lg border border-border bg-muted/30">
                   <div className="text-center flex-1">
-                    <p className="text-sm text-muted-foreground mb-1">You sell</p>
-                    <p className="text-2xl font-bold">{sellQuote.inputAmount}</p>
-                    <p className="text-sm font-medium text-primary">{sellQuote.symbol}</p>
+                    <p className="text-[11px] uppercase tracking-widest text-muted-foreground mb-1">You sell</p>
+                    <p className="text-num text-2xl font-semibold text-bear">{sellQuote.inputAmount}</p>
+                    <p className="font-mono font-bold text-sm mt-0.5">{sellQuote.symbol}</p>
                   </div>
                   <ArrowRight className="w-6 h-6 text-muted-foreground flex-shrink-0" />
                   <div className="text-center flex-1">
-                    <p className="text-sm text-muted-foreground mb-1">You receive</p>
-                    <p className="text-2xl font-bold text-green-500">${sellQuote.outputAmount}</p>
-                    <p className="text-sm font-medium">USDC</p>
+                    <p className="text-[11px] uppercase tracking-widest text-muted-foreground mb-1">You receive</p>
+                    <p className="text-num text-2xl font-semibold text-bull">${sellQuote.outputAmount}</p>
+                    <p className="font-mono font-bold text-sm mt-0.5">USDC</p>
                   </div>
                 </div>
 
@@ -364,7 +457,7 @@ export default function Portfolio() {
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
                     <AlertCircle className="w-5 h-5 text-yellow-500 flex-shrink-0" />
                     <p className="text-sm text-yellow-500">
-                      Price impact: {parseFloat(sellQuote.priceImpactPct).toFixed(2)}%
+                      Price impact: <span className="text-num">{parseFloat(sellQuote.priceImpactPct).toFixed(2)}%</span>
                     </p>
                   </div>
                 )}
@@ -376,8 +469,8 @@ export default function Portfolio() {
             ) : null}
 
             <DialogFooter className="gap-2">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => {
                   setSellDialogOpen(false);
                   setSellQuote(null);
@@ -386,7 +479,7 @@ export default function Portfolio() {
               >
                 Cancel
               </Button>
-              <Button 
+              <Button
                 onClick={handleConfirmSell}
                 disabled={!sellQuote || sellMutation.isPending || isLoadingQuote}
                 data-testid="button-confirm-sell"
@@ -397,289 +490,224 @@ export default function Portfolio() {
                     Selling...
                   </>
                 ) : (
-                  "Confirm Sell"
+                  "Confirm sell"
                 )}
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        <div className="grid gap-6 md:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Holdings</CardTitle>
-              <Wallet className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {holdingsLoading ? (
-                <Skeleton className="h-8 w-24" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-total-value">
-                    ${totalValue.toFixed(2)}
-                  </div>
-                  <p className="text-xs text-muted-foreground">USDC + Stocks value</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">USDC Balance</CardTitle>
-              <DollarSign className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {holdingsLoading ? (
-                <Skeleton className="h-8 w-24" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-usdc-balance">
-                    ${usdcBalance.toFixed(2)}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Available for trading</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Stock Assets</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {holdingsLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-asset-count">
-                    {holdings?.length || 0}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Tokenized stocks</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Trades</CardTitle>
-              <Clock className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {tradesLoading ? (
-                <Skeleton className="h-8 w-16" />
-              ) : (
-                <>
-                  <div className="text-2xl font-bold" data-testid="text-trade-total">
-                    {trades?.length || 0}
-                  </div>
-                  <p className="text-xs text-muted-foreground">All time</p>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <Tabs defaultValue="holdings" className="w-full">
+        <Tabs defaultValue="holdings" className="w-full rise-in">
           <TabsList>
             <TabsTrigger value="holdings" data-testid="tab-holdings">Holdings</TabsTrigger>
-            <TabsTrigger value="history" data-testid="tab-history">Trade History</TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-history">Trade history</TabsTrigger>
+            <TabsTrigger value="transfers" data-testid="tab-transfers">Transfers</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="holdings" className="mt-6">
+          <TabsContent value="holdings" className="mt-4">
             {holdingsLoading ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+              <LoadingRows />
             ) : holdings?.length > 0 ? (
               <Card>
-                <CardContent className="pt-6">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Asset</TableHead>
-                        <TableHead className="text-right">Balance</TableHead>
-                        <TableHead className="text-right">Price</TableHead>
-                        <TableHead className="text-right">USD Value</TableHead>
-                        <TableHead className="text-right">P&L</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {holdings.map((holding: any) => {
-                        const isProfit = holding.profitLoss !== null && holding.profitLoss >= 0;
-                        const hasData = holding.profitLoss !== null;
-                        
-                        return (
-                          <TableRow key={holding.mint} data-testid={`holding-row-${holding.symbol}`}>
-                            <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                                  <span className="text-sm font-bold text-primary">
-                                    {holding.symbol?.slice(0, 2)}
-                                  </span>
-                                </div>
-                                <div>
-                                  <p className="font-medium">{holding.symbol}</p>
-                                  <p className="text-sm text-muted-foreground">{holding.underlyingTicker}</p>
-                                </div>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-right font-mono">
-                              {holding.balance}
-                            </TableCell>
-                            <TableCell className="text-right font-mono">
-                              {holding.price ? `$${holding.price.toFixed(2)}` : "—"}
-                            </TableCell>
-                            <TableCell className="text-right font-mono">
+                <CardContent className="p-2 md:p-3">
+                  <div className="divide-y divide-border">
+                    {holdings.map((holding: any) => {
+                      const isProfit = holding.profitLoss !== null && holding.profitLoss >= 0;
+                      const hasData = holding.profitLoss !== null;
+
+                      return (
+                        <div
+                          key={holding.mint}
+                          className="flex items-center gap-3 md:gap-4 px-2 md:px-3 py-3.5 hover-elevate rounded-lg"
+                          data-testid={`holding-row-${holding.symbol}`}
+                        >
+                          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                            <span className="font-mono text-sm font-bold text-primary">
+                              {holding.symbol?.slice(0, 2)}
+                            </span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-mono font-bold text-sm">
+                              ${holding.underlyingTicker || holding.symbol}
+                            </p>
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">
+                              <span className="text-num">{holding.balance}</span> {holding.symbol}
+                              {holding.price ? (
+                                <span className="hidden sm:inline">
+                                  {" "}· <span className="text-num">${holding.price.toFixed(2)}</span> each
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-num text-sm font-semibold">
                               {holding.usdValue ? `$${holding.usdValue.toFixed(2)}` : "—"}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              {hasData ? (
-                                <div className={`flex flex-col items-end ${isProfit ? 'text-green-500' : 'text-red-500'}`}>
-                                  <div className="flex items-center gap-1 font-mono">
-                                    {isProfit ? (
-                                      <TrendingUp className="w-4 h-4" />
-                                    ) : (
-                                      <TrendingDown className="w-4 h-4" />
-                                    )}
-                                    {isProfit ? '+' : ''}${holding.profitLoss?.toFixed(2)}
-                                  </div>
-                                  <div className="text-xs">
-                                    {isProfit ? '+' : ''}{holding.profitLossPct?.toFixed(1)}%
-                                  </div>
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </TableCell>
-                            <TableCell className="text-right">
-                              <Button 
-                                size="sm" 
-                                variant="outline" 
-                                data-testid={`button-sell-${holding.symbol}`}
-                                onClick={() => handleSellClick(holding.underlyingTicker, holding.balance)}
-                              >
-                                Sell
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                            </p>
+                            {hasData ? (
+                              <p className={`text-num text-xs mt-0.5 ${isProfit ? "text-bull" : "text-bear"}`}>
+                                {formatSignedUsd(holding.profitLoss)}
+                                <span className="hidden sm:inline">
+                                  {" "}({isProfit ? "+" : ""}{holding.profitLossPct?.toFixed(1)}%)
+                                </span>
+                              </p>
+                            ) : (
+                              <p className="text-xs text-muted-foreground mt-0.5">—</p>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="shrink-0"
+                            data-testid={`button-sell-${holding.symbol}`}
+                            onClick={() => handleSellClick(holding.underlyingTicker, holding.balance)}
+                          >
+                            Sell
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </CardContent>
               </Card>
             ) : (
               <Card>
-                <CardContent className="py-16 text-center">
-                  <Wallet className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <h3 className="text-xl font-semibold mb-2">No holdings yet</h3>
-                  <p className="text-muted-foreground">
-                    Execute trades to see your tokenized stock holdings here
-                  </p>
+                <CardContent>
+                  <EmptyState
+                    icon={Wallet}
+                    title="No holdings yet"
+                    description="Execute trades to see your tokenized stock holdings here"
+                  />
                 </CardContent>
               </Card>
             )}
           </TabsContent>
 
-          <TabsContent value="history" className="mt-6">
+          <TabsContent value="history" className="mt-4">
             {tradesLoading ? (
+              <LoadingRows />
+            ) : trades && trades.length > 0 ? (
               <Card>
-                <CardContent className="pt-6">
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={i} className="h-16 w-full" />
+                <CardContent className="p-2 md:p-3">
+                  <div className="divide-y divide-border">
+                    {trades.map((trade: any) => (
+                      <div
+                        key={trade.id}
+                        className="flex items-center gap-3 md:gap-4 px-2 md:px-3 py-3.5"
+                        data-testid={`trade-row-${trade.id}`}
+                      >
+                        <SignalBadge action={trade.isBuy ? "BUY" : "SELL"} size="sm" className="shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">
+                            <span className="text-num text-bear">-{trade.inputAmountDisplay}</span>{" "}
+                            <span className="font-mono font-bold">{trade.inputTicker}</span>
+                            <ArrowRight className="w-3 h-3 inline mx-1.5 text-muted-foreground" />
+                            <span className="text-num text-bull">
+                              {trade.outputAmountDisplay ? `+${trade.outputAmountDisplay}` : "—"}
+                            </span>{" "}
+                            <span className="font-mono font-bold">{trade.outputTicker}</span>
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {formatDistanceToNow(new Date(trade.createdAt), { addSuffix: true })}
+                          </p>
+                        </div>
+                        <StatusChip status={trade.status} />
+                        {trade.txSig && (
+                          <a
+                            href={`https://solscan.io/tx/${trade.txSig}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline inline-flex items-center gap-1 text-xs shrink-0"
+                            data-testid={`link-tx-${trade.id}`}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View
+                          </a>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </CardContent>
               </Card>
-            ) : trades && trades.length > 0 ? (
+            ) : (
               <Card>
-                <CardContent className="pt-6">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Type</TableHead>
-                        <TableHead>Sold</TableHead>
-                        <TableHead>Received</TableHead>
-                        <TableHead className="text-right">Status</TableHead>
-                        <TableHead className="text-right">Time</TableHead>
-                        <TableHead className="text-right">Txn Link</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {trades.map((trade: any) => (
-                        <TableRow key={trade.id} data-testid={`trade-row-${trade.id}`}>
-                          <TableCell>
-                            <div className={`flex items-center gap-2 ${trade.isBuy ? "text-green-500" : "text-red-500"}`}>
-                              {trade.isBuy ? (
-                                <ArrowUpRight className="w-4 h-4" />
-                              ) : (
-                                <ArrowDownRight className="w-4 h-4" />
-                              )}
-                              <span className="font-medium">{trade.isBuy ? "Buy" : "Sell"}</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium">{trade.inputTicker}</div>
-                            <div className="text-sm text-muted-foreground font-mono">
-                              {trade.inputAmountDisplay}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="font-medium">{trade.outputTicker}</div>
-                            <div className="text-sm text-muted-foreground font-mono">
-                              {trade.outputAmountDisplay || "—"}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Badge 
-                              variant={trade.status === "COMPLETED" ? "default" : 
-                                      trade.status === "PENDING" ? "secondary" : "destructive"}
-                            >
-                              {trade.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right text-muted-foreground">
-                            {formatDistanceToNow(new Date(trade.createdAt), { addSuffix: true })}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {trade.txSig && (
-                              <a 
-                                href={`https://solscan.io/tx/${trade.txSig}`} 
-                                target="_blank" 
-                                rel="noopener noreferrer"
-                                className="text-primary hover:underline inline-flex items-center gap-1"
-                                data-testid={`link-tx-${trade.id}`}
-                              >
-                                <ExternalLink className="w-3 h-3" />
-                                View
-                              </a>
+                <CardContent>
+                  <EmptyState
+                    icon={Clock}
+                    title="No trades yet"
+                    description="Your trade history will appear here"
+                  />
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="transfers" className="mt-4">
+            {transfersLoading ? (
+              <LoadingRows />
+            ) : transfersData && transfersData.length > 0 ? (
+              <Card>
+                <CardContent className="p-2 md:p-3">
+                  <div className="divide-y divide-border">
+                    {transfersData.map((transfer: any) => {
+                      const incoming = transfer.direction === "incoming";
+                      return (
+                        <div
+                          key={transfer.id}
+                          className="flex items-center gap-3 md:gap-4 px-2 md:px-3 py-3.5"
+                          data-testid={`transfer-row-${transfer.id}`}
+                        >
+                          <div
+                            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                              incoming ? "bg-bull/10 text-bull" : "bg-bear/10 text-bear"
+                            }`}
+                          >
+                            {incoming ? (
+                              <ArrowDownLeft className="w-4 h-4" />
+                            ) : (
+                              <ArrowUpRight className="w-4 h-4" />
                             )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm">
+                              <span className={`text-num font-semibold ${incoming ? "text-bull" : "text-bear"}`}>
+                                {incoming ? "+" : "-"}{transfer.amountDisplay ?? transfer.amount}
+                              </span>{" "}
+                              <span className="font-mono font-bold">{transfer.symbol || "TOKEN"}</span>
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                              {incoming ? "from " : "to "}
+                              <span className="text-num">
+                                {shortAddress(incoming ? transfer.fromAddress : transfer.toAddress)}
+                              </span>
+                              {" "}· {formatDistanceToNow(new Date(transfer.createdAt), { addSuffix: true })}
+                            </p>
+                          </div>
+                          {transfer.txSig && (
+                            <a
+                              href={`https://solscan.io/tx/${transfer.txSig}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline inline-flex items-center gap-1 text-xs shrink-0"
+                              data-testid={`link-transfer-tx-${transfer.id}`}
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              View
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </CardContent>
               </Card>
             ) : (
               <Card>
-                <CardContent className="py-16 text-center">
-                  <Clock className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <h3 className="text-xl font-semibold mb-2">No trades yet</h3>
-                  <p className="text-muted-foreground">
-                    Your trade history will appear here
-                  </p>
+                <CardContent>
+                  <EmptyState
+                    icon={Send}
+                    title="No transfers yet"
+                    description="Deposits and withdrawals from your wallet will appear here"
+                  />
                 </CardContent>
               </Card>
             )}

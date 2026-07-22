@@ -72,8 +72,12 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 - `USDC_MINT`: USDC token mint address
 - `ADMIN_EMAIL`: Email for admin access
 - `SESSION_SECRET`: Session encryption
-- `X_API_BEARER_TOKEN`: (Optional) X API for real tweet polling
+- `X_API_BEARER_TOKEN`: (Optional) TwitterAPI.io key for real tweet polling
 - `JUPITER_API_KEY`: Jupiter API key for Ultra API access
+- `AI_INTEGRATIONS_OPENAI_API_KEY` / `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI access for tweet classification (falls back to `OPENAI_API_KEY`/`OPENAI_BASE_URL`; without any key the classifier degrades to regex cashtag matching and mention-only alerts)
+- `CLASSIFIER_MODEL`: (Optional) model for classification, default `gpt-5.1`
+- `MIN_ALERT_CONFIDENCE`: (Optional) per-ticker confidence threshold for alerts, default `0.6`
+- `TWEET_POLL_MINUTES`: (Optional) tweet polling cadence, default `15`
 
 ## Key Features
 1. **Privy Authentication**: Email, wallet, Google, Twitter login with embedded Solana wallets
@@ -85,10 +89,16 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 7. **Admin Panel**: Manage asset registry (ticker → mint mappings)
 8. **One-Tap Trading**: Server-side trade execution via Privy delegated actions (optional)
 
+## Trader Performance & Guardrails
+- Alert events snapshot the token's USD price at signal time (Jupiter-quote derived, `alert_events.price_usd_at_event`); per-trader track records (avg return per call, win rate, hypothetical $10-per-call P&L) are computed on demand and exposed on `/api/subscriptions` and `/api/influencers/:id`
+- An hourly worker sends a Telegram "24h check-in" with real P&L for each completed buy (`trades.performance_notified_at` marks sent)
+- `users.daily_spend_cap_usd` (settable in Settings) hard-limits Telegram one-tap buys per UTC day
+- After schema changes run `npm run db:push` (adds the three columns above)
+
 ## Background Workers
-- **Tweet Polling**: Every 2 minutes, polls new tweets from tracked influencers
-- **Classification**: Every 1 minute, classifies unprocessed tweets via AI
-- **Alert Distribution**: Sends Telegram alerts to subscribers for actionable signals
+- **Tweet Polling**: Every 15 minutes, polls new tweets from tracked influencers
+- **Classification**: Every 1 minute, classifies unprocessed tweets via GPT (structured output: per-ticker sentiment BULLISH/BEARISH/NEUTRAL, action BUY/SELL/NONE, confidence). Only directional signals ≥ MIN_ALERT_CONFIDENCE become alert events; without an AI key, cashtag mentions alert as neutral "MENTION"s
+- **Alert Distribution**: Sends action-aware Telegram alerts (BUY/SELL signal headline, confidence, AI reason) with direction-ordered trade buttons
 
 ## Design Theme
-Dark trading theme with green (#22c55e) primary color for bullish signals. Uses shadcn/ui components with custom trading-focused styling.
+"Signal terminal" design system (see client/src/index.css): near-black graphite base, volt-lime brand accent (`--primary`), emerald/red reserved strictly for buy/sell semantics (`--bull`/`--bear`), Space Grotesk display headings, Inter body, JetBrains Mono tabular numerals for all figures (`text-num`). Signals always render via the shared `SignalBadge` component.

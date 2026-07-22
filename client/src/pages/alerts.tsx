@@ -1,117 +1,218 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
-  Bell, 
-  TrendingUp, 
-  TrendingDown,
+import {
+  Bell,
   ExternalLink,
   Clock,
   Check,
   X,
-  AlertCircle
+  AlertCircle,
+  Plus,
+  ChevronDown,
+  type LucideIcon,
 } from "lucide-react";
 import { Link } from "wouter";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { SignalBadge } from "@/components/SignalBadge";
 import { formatDistanceToNow } from "date-fns";
 
-function AlertCard({ alert }: { alert: any }) {
-  const isBuy = alert.action === "BUY";
-  const confidencePercent = Math.round((alert.confidence || 0) * 100);
-  
-  const statusColors: Record<string, string> = {
-    SENT: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-    CLICKED: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
-    EXECUTED: "bg-green-500/10 text-green-500 border-green-500/20",
-    IGNORED: "bg-gray-500/10 text-gray-500 border-gray-500/20",
-    FAILED: "bg-red-500/10 text-red-500 border-red-500/20",
-  };
+interface AlertItem {
+  id: number;
+  status: string;
+  createdAt: string;
+  ticker: string;
+  sentiment?: string | null;
+  action?: string | null;
+  confidence?: string | null;
+  tweetText?: string | null;
+  tweetUrl?: string | null;
+  influencerHandle?: string | null;
+  reason?: string | null;
+  priceUsdAtEvent?: string | null;
+  tweetCreatedAt?: string | null;
+}
 
-  const statusIcons: Record<string, any> = {
-    SENT: Bell,
-    CLICKED: Clock,
-    EXECUTED: Check,
-    IGNORED: X,
-    FAILED: AlertCircle,
-  };
+const statusStyles: Record<string, string> = {
+  SENT: "border-primary/30 bg-primary/10 text-primary",
+  CLICKED: "border-border bg-muted/50 text-muted-foreground",
+  EXECUTED: "border-bull/30 bg-bull/10 text-bull",
+  IGNORED: "border-border bg-muted/50 text-muted-foreground",
+  FAILED: "border-bear/30 bg-bear/10 text-bear",
+};
 
+const statusIcons: Record<string, LucideIcon> = {
+  SENT: Bell,
+  CLICKED: Clock,
+  EXECUTED: Check,
+  IGNORED: X,
+  FAILED: AlertCircle,
+};
+
+const statusLabels: Record<string, string> = {
+  SENT: "New",
+  CLICKED: "Viewed",
+  EXECUTED: "Executed",
+  IGNORED: "Ignored",
+  FAILED: "Failed",
+};
+
+function SignalRow({ alert }: { alert: AlertItem }) {
   const StatusIcon = statusIcons[alert.status] || Bell;
+  const [showReason, setShowReason] = useState(false);
+
+  // Prefer the influencer's actual post time over alert creation time
+  const signalTime = alert.tweetCreatedAt || alert.createdAt;
 
   return (
-    <Card className="hover-elevate" data-testid={`alert-card-${alert.id}`}>
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex-1 space-y-3">
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                isBuy ? "bg-green-500/10" : "bg-red-500/10"
-              }`}>
-                {isBuy ? (
-                  <TrendingUp className="w-5 h-5 text-green-500" />
-                ) : (
-                  <TrendingDown className="w-5 h-5 text-red-500" />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xl font-bold">{alert.ticker}</span>
-                  <Badge variant={isBuy ? "default" : "destructive"}>
-                    {alert.action}
-                  </Badge>
-                  <Badge variant="secondary">{confidencePercent}%</Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  @{alert.influencerHandle} · {formatDistanceToNow(new Date(alert.createdAt), { addSuffix: true })}
-                </p>
-              </div>
-            </div>
+    <div
+      className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 py-4 first:pt-0 last:pb-0"
+      data-testid={`alert-card-${alert.id}`}
+    >
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="font-mono font-bold text-base">${alert.ticker}</span>
+          <SignalBadge action={alert.action} confidence={alert.confidence} size="sm" />
+          <span
+            className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+              statusStyles[alert.status] || statusStyles.CLICKED
+            }`}
+          >
+            <StatusIcon className="w-2.5 h-2.5" />
+            {statusLabels[alert.status] || alert.status}
+          </span>
+        </div>
 
-            {alert.tweetText && (
-              <p className="text-sm text-muted-foreground line-clamp-2 pl-13">
-                "{alert.tweetText}"
-              </p>
-            )}
+        <p className="text-xs text-muted-foreground">
+          {alert.influencerHandle && (
+            <span className="font-mono">@{alert.influencerHandle}</span>
+          )}
+          {alert.influencerHandle && " · "}
+          <span className="text-num">
+            {alert.tweetCreatedAt ? "posted " : ""}
+            {formatDistanceToNow(new Date(signalTime), { addSuffix: true })}
+          </span>
+        </p>
 
-            <div className="flex items-center gap-3 pl-13">
-              <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs border ${statusColors[alert.status]}`}>
-                <StatusIcon className="w-3 h-3" />
-                <span>{alert.status}</span>
-              </div>
-              {alert.sentiment && (
-                <Badge variant="outline" className="text-xs">
-                  {alert.sentiment}
-                </Badge>
-              )}
-            </div>
-          </div>
+        {alert.tweetText && (
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            &ldquo;{alert.tweetText}&rdquo;
+          </p>
+        )}
 
-          <div className="flex flex-col gap-2">
-            {alert.status === "SENT" && (
-              <>
-                <Link href={`/trade/confirm?alertId=${alert.id}&amount=10`}>
-                  <Button size="sm" className="w-full" data-testid={`button-buy-10-${alert.id}`}>
-                    Buy $10
-                  </Button>
-                </Link>
-                <Link href={`/trade/confirm?alertId=${alert.id}&amount=25`}>
-                  <Button size="sm" variant="outline" className="w-full" data-testid={`button-buy-25-${alert.id}`}>
-                    Buy $25
-                  </Button>
-                </Link>
-              </>
+        {(alert.reason || alert.tweetUrl) && (
+          <div className="flex items-center gap-3 flex-wrap">
+            {alert.reason && (
+              <button
+                type="button"
+                onClick={() => setShowReason((v) => !v)}
+                aria-expanded={showReason}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                data-testid={`button-why-signal-${alert.id}`}
+              >
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform ${showReason ? "rotate-180" : ""}`}
+                />
+                Why this signal?
+              </button>
             )}
             {alert.tweetUrl && (
-              <Button size="sm" variant="ghost" asChild>
-                <a href={alert.tweetUrl} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="w-4 h-4 mr-1" />
-                  Tweet
-                </a>
-              </Button>
+              <a
+                href={alert.tweetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                View post
+              </a>
             )}
           </div>
+        )}
+
+        {alert.reason && showReason && (
+          <p
+            className="text-xs text-muted-foreground border-l-2 border-primary/40 pl-2.5"
+            data-testid={`text-signal-reason-${alert.id}`}
+          >
+            {alert.reason}
+          </p>
+        )}
+      </div>
+
+      {alert.status === "SENT" && (
+        <div className="flex sm:flex-col gap-2 shrink-0">
+          <Link href={`/trade/confirm?alertId=${alert.id}&amount=10`}>
+            <Button
+              size="sm"
+              className="w-full"
+              variant={alert.action === "SELL" ? "outline" : "default"}
+              data-testid={`button-buy-10-${alert.id}`}
+            >
+              Trade $10
+            </Button>
+          </Link>
+          <Link href={`/trade/confirm?alertId=${alert.id}&amount=25`}>
+            <Button size="sm" variant="outline" className="w-full" data-testid={`button-buy-25-${alert.id}`}>
+              Trade $25
+            </Button>
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SignalList({
+  alerts,
+  isLoading,
+  emptyIcon: EmptyIcon,
+  emptyTitle,
+  emptyDescription,
+  emptyCta,
+}: {
+  alerts: AlertItem[];
+  isLoading: boolean;
+  emptyIcon: LucideIcon;
+  emptyTitle: string;
+  emptyDescription: string;
+  emptyCta?: React.ReactNode;
+}) {
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-24 w-full rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (alerts.length === 0) {
+    return (
+      <Card className="rise-in">
+        <CardContent className="py-12 text-center">
+          <div className="w-12 h-12 mx-auto rounded-xl bg-muted flex items-center justify-center mb-4">
+            <EmptyIcon className="w-5 h-5 text-muted-foreground" />
+          </div>
+          <p className="font-medium">{emptyTitle}</p>
+          <p className="text-sm text-muted-foreground mt-1">{emptyDescription}</p>
+          {emptyCta && <div className="mt-4">{emptyCta}</div>}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="rise-in">
+      <CardContent className="p-4 md:p-5">
+        <div className="divide-y divide-border">
+          {alerts.map((alert) => (
+            <SignalRow key={alert.id} alert={alert} />
+          ))}
         </div>
       </CardContent>
     </Card>
@@ -119,113 +220,90 @@ function AlertCard({ alert }: { alert: any }) {
 }
 
 export default function Alerts() {
-  const { data: alerts, isLoading } = useQuery({
+  const { data: alerts, isLoading } = useQuery<AlertItem[]>({
     queryKey: ["/api/alerts"],
   });
 
-  const pendingAlerts = alerts?.filter((a: any) => a.status === "SENT") || [];
-  const executedAlerts = alerts?.filter((a: any) => a.status === "EXECUTED") || [];
+  const pendingAlerts = alerts?.filter((a) => a.status === "SENT") || [];
+  const executedAlerts = alerts?.filter((a) => a.status === "EXECUTED") || [];
   const allAlerts = alerts || [];
 
   return (
     <AppLayout>
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold" data-testid="text-alerts-title">Alerts</h1>
-          <p className="text-muted-foreground mt-1">View and act on trading signals from your influencers</p>
+      <div className="space-y-6">
+        <div className="rise-in">
+          <h1 className="font-display text-2xl md:text-3xl font-bold" data-testid="text-alerts-title">
+            Signals
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            AI-classified calls from the traders you follow — trade them in one tap
+          </p>
         </div>
 
         <Tabs defaultValue="pending" className="w-full">
           <TabsList>
             <TabsTrigger value="pending" data-testid="tab-pending">
-              Pending
+              New
               {pendingAlerts.length > 0 && (
-                <Badge variant="default" className="ml-2">{pendingAlerts.length}</Badge>
+                <span className="ml-2 inline-flex items-center justify-center rounded-md bg-primary/15 px-1.5 py-0.5 text-num text-[10px] font-semibold text-primary">
+                  {pendingAlerts.length}
+                </span>
               )}
             </TabsTrigger>
-            <TabsTrigger value="executed" data-testid="tab-executed">Executed</TabsTrigger>
-            <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
+            <TabsTrigger value="executed" data-testid="tab-executed">
+              Executed
+              {executedAlerts.length > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center rounded-md bg-muted px-1.5 py-0.5 text-num text-[10px] font-semibold text-muted-foreground">
+                  {executedAlerts.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="all" data-testid="tab-all">
+              All
+              {allAlerts.length > 0 && (
+                <span className="ml-2 inline-flex items-center justify-center rounded-md bg-muted px-1.5 py-0.5 text-num text-[10px] font-semibold text-muted-foreground">
+                  {allAlerts.length}
+                </span>
+              )}
+            </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="pending" className="mt-6">
-            {isLoading ? (
-              <div className="space-y-4">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
-                ))}
-              </div>
-            ) : pendingAlerts.length > 0 ? (
-              <div className="space-y-4">
-                {pendingAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
-                ))}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="py-16 text-center">
-                  <Bell className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <h3 className="text-xl font-semibold mb-2">No pending alerts</h3>
-                  <p className="text-muted-foreground">
-                    New signals will appear here when detected
-                  </p>
-                </CardContent>
-              </Card>
-            )}
+          <TabsContent value="pending" className="mt-4">
+            <SignalList
+              alerts={pendingAlerts}
+              isLoading={isLoading}
+              emptyIcon={Bell}
+              emptyTitle="No new signals"
+              emptyDescription="Fresh calls from your traders will land here"
+            />
           </TabsContent>
 
-          <TabsContent value="executed" className="mt-6">
-            {isLoading ? (
-              <div className="space-y-4">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
-                ))}
-              </div>
-            ) : executedAlerts.length > 0 ? (
-              <div className="space-y-4">
-                {executedAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
-                ))}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="py-16 text-center">
-                  <Check className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <h3 className="text-xl font-semibold mb-2">No executed trades</h3>
-                  <p className="text-muted-foreground">
-                    Trades you execute will appear here
-                  </p>
-                </CardContent>
-              </Card>
-            )}
+          <TabsContent value="executed" className="mt-4">
+            <SignalList
+              alerts={executedAlerts}
+              isLoading={isLoading}
+              emptyIcon={Check}
+              emptyTitle="No executed trades"
+              emptyDescription="Signals you trade will appear here"
+            />
           </TabsContent>
 
-          <TabsContent value="all" className="mt-6">
-            {isLoading ? (
-              <div className="space-y-4">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-32 w-full" />
-                ))}
-              </div>
-            ) : allAlerts.length > 0 ? (
-              <div className="space-y-4">
-                {allAlerts.map((alert: any) => (
-                  <AlertCard key={alert.id} alert={alert} />
-                ))}
-              </div>
-            ) : (
-              <Card>
-                <CardContent className="py-16 text-center">
-                  <Bell className="w-16 h-16 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <h3 className="text-xl font-semibold mb-2">No alerts yet</h3>
-                  <p className="text-muted-foreground">
-                    Add influencers to start receiving trading signals
-                  </p>
-                  <Link href="/influencers">
-                    <Button className="mt-4">Add Influencers</Button>
-                  </Link>
-                </CardContent>
-              </Card>
-            )}
+          <TabsContent value="all" className="mt-4">
+            <SignalList
+              alerts={allAlerts}
+              isLoading={isLoading}
+              emptyIcon={Bell}
+              emptyTitle="No signals yet"
+              emptyDescription="Follow traders to start receiving signals"
+              emptyCta={
+                <Link href="/influencers">
+                  <Button variant="outline" size="sm">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Follow a trader
+                  </Button>
+                </Link>
+              }
+            />
           </TabsContent>
         </Tabs>
       </div>
