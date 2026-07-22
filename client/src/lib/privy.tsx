@@ -59,11 +59,13 @@ export function PrivyProviderWrapper({ children }: { children: React.ReactNode }
       config={{
         appearance: {
           theme: 'dark',
-          accentColor: '#22c55e',
+          accentColor: '#cef91f',
         },
         loginMethods: ['email', 'wallet', 'google', 'twitter'],
         embeddedWallets: {
-          createOnLogin: 'users-without-wallets',
+          solana: {
+            createOnLogin: 'users-without-wallets',
+          },
         },
       }}
     >

@@ -53,6 +53,7 @@ export interface IStorage {
   getAlertEvent(id: number): Promise<AlertEvent | undefined>;
   createAlertEvent(alertEvent: InsertAlertEvent): Promise<AlertEvent>;
   getRecentAlertEventsForInfluencer(influencerId: number, hoursBack: number): Promise<AlertEvent[]>;
+  getAlertEventsByInfluencer(influencerId: number, limit?: number): Promise<AlertEvent[]>;
 
   getUserAlert(id: number): Promise<UserAlert | undefined>;
   getUserAlertsByUser(userId: number, limit?: number): Promise<UserAlert[]>;
@@ -68,6 +69,7 @@ export interface IStorage {
   getTradesByUser(userId: number, limit?: number): Promise<Trade[]>;
   createTrade(trade: InsertTrade): Promise<Trade>;
   updateTrade(id: number, data: Partial<Trade>): Promise<Trade | undefined>;
+  getTradesForPerformanceCheck(cutoff: Date): Promise<Trade[]>;
 
   getAssetRegistry(): Promise<AssetRegistryEntry[]>;
   getAssetByTicker(ticker: string): Promise<AssetRegistryEntry | undefined>;
@@ -240,6 +242,7 @@ export class DatabaseStorage implements IStorage {
         sentiment: alertEvents.sentiment,
         action: alertEvents.action,
         confidence: alertEvents.confidence,
+        priceUsdAtEvent: alertEvents.priceUsdAtEvent,
         createdAt: alertEvents.createdAt,
       })
       .from(alertEvents)
@@ -251,6 +254,26 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(alertEvents.createdAt));
+  }
+
+  async getAlertEventsByInfluencer(influencerId: number, limit = 200): Promise<AlertEvent[]> {
+    return await db
+      .select({
+        id: alertEvents.id,
+        tweetId: alertEvents.tweetId,
+        classificationId: alertEvents.classificationId,
+        ticker: alertEvents.ticker,
+        sentiment: alertEvents.sentiment,
+        action: alertEvents.action,
+        confidence: alertEvents.confidence,
+        priceUsdAtEvent: alertEvents.priceUsdAtEvent,
+        createdAt: alertEvents.createdAt,
+      })
+      .from(alertEvents)
+      .innerJoin(tweets, eq(alertEvents.tweetId, tweets.id))
+      .where(eq(tweets.influencerId, influencerId))
+      .orderBy(desc(alertEvents.createdAt))
+      .limit(limit);
   }
 
   async getUserAlert(id: number): Promise<UserAlert | undefined> {
@@ -315,6 +338,21 @@ export class DatabaseStorage implements IStorage {
   async updateTrade(id: number, data: Partial<Trade>): Promise<Trade | undefined> {
     const [trade] = await db.update(trades).set(data).where(eq(trades.id, id)).returning();
     return trade;
+  }
+
+  // Completed trades older than cutoff that haven't had a performance
+  // follow-up sent yet.
+  async getTradesForPerformanceCheck(cutoff: Date): Promise<Trade[]> {
+    return db.select().from(trades)
+      .where(
+        and(
+          eq(trades.status, "COMPLETED"),
+          isNull(trades.performanceNotifiedAt),
+          lt(trades.createdAt, cutoff)
+        )
+      )
+      .orderBy(desc(trades.createdAt))
+      .limit(200);
   }
 
   async getAssetRegistry(): Promise<AssetRegistryEntry[]> {

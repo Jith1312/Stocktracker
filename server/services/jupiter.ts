@@ -30,6 +30,9 @@ export interface UltraExecuteResponse {
   outputMint?: string;
   inputAmount?: string;
   outputAmount?: string;
+  // Amounts as actually settled onchain, reported by Ultra /execute
+  inputAmountResult?: string;
+  outputAmountResult?: string;
 }
 
 export interface QuoteResponse {

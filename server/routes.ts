@@ -11,6 +11,7 @@ import { classifyTweet, shouldCreateAlert } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
 import * as privyService from "./services/privy";
+import * as performanceService from "./services/performance";
 import { pollInfluencerTweets, sendBackfillAlerts } from "./workers";
 
 const privy = new PrivyClient(
@@ -49,7 +50,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
       // Get Solana wallet - check linked accounts for embedded Solana wallet
       let solanaPubkey: string | null = null;
       if (privyUser?.linkedAccounts) {
-        const solanaWallet = privyUser.linkedAccounts.find(
+        const solanaWallet: any = privyUser.linkedAccounts.find(
           (account: any) => account.type === 'wallet' && account.chainType === 'solana'
         );
         solanaPubkey = solanaWallet?.address || null;
@@ -157,6 +158,7 @@ export async function registerRoutes(
         telegramChatId: user.telegramChatId,
         telegramUsername: user.telegramUsername,
         defaultBuyAmountUsd: user.defaultBuyAmountUsd,
+        dailySpendCapUsd: user.dailySpendCapUsd,
         autoExecuteEnabled: user.autoExecuteEnabled,
         signerEnabled: user.signerEnabled,
         privyWalletId: user.privyWalletId,
@@ -172,10 +174,10 @@ export async function registerRoutes(
   app.patch("/api/user/profile", authMiddleware, async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const { defaultBuyAmountUsd, autoExecuteEnabled, onboardingCompleted } = req.body;
-      
-      const updateData: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean; onboardingCompleted?: boolean } = {};
-      
+      const { defaultBuyAmountUsd, dailySpendCapUsd, autoExecuteEnabled, onboardingCompleted } = req.body;
+
+      const updateData: { defaultBuyAmountUsd?: string; dailySpendCapUsd?: string | null; autoExecuteEnabled?: boolean; onboardingCompleted?: boolean } = {};
+
       if (defaultBuyAmountUsd !== undefined) {
         const amount = parseFloat(defaultBuyAmountUsd);
         if (isNaN(amount) || amount <= 0 || amount > 10000) {
@@ -183,6 +185,19 @@ export async function registerRoutes(
           return;
         }
         updateData.defaultBuyAmountUsd = amount.toString();
+      }
+
+      if (dailySpendCapUsd !== undefined) {
+        if (dailySpendCapUsd === null || dailySpendCapUsd === "") {
+          updateData.dailySpendCapUsd = null;
+        } else {
+          const cap = parseFloat(dailySpendCapUsd);
+          if (isNaN(cap) || cap <= 0 || cap > 100000) {
+            res.status(400).json({ error: "Invalid daily cap. Must be between $1 and $100,000, or empty to disable" });
+            return;
+          }
+          updateData.dailySpendCapUsd = cap.toString();
+        }
       }
       
       if (autoExecuteEnabled !== undefined) {
@@ -299,9 +314,15 @@ export async function registerRoutes(
       
       const enriched = await Promise.all(subs.map(async (sub) => {
         const influencer = await storage.getInfluencer(sub.influencerId);
-        return { ...sub, influencer };
+        let performance = null;
+        try {
+          performance = await performanceService.computeInfluencerPerformance(sub.influencerId);
+        } catch (e) {
+          console.error(`[API] Performance calc error for influencer ${sub.influencerId}:`, e);
+        }
+        return { ...sub, influencer, performance };
       }));
-      
+
       res.json(enriched);
     } catch (error) {
       console.error("[API] Subscriptions error:", error);
@@ -365,12 +386,18 @@ export async function registerRoutes(
 
   app.get("/api/influencers/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const influencer = await storage.getInfluencer(id);
       if (!influencer) {
         return res.status(404).json({ error: "Influencer not found" });
       }
-      res.json(influencer);
+      let performance = null;
+      try {
+        performance = await performanceService.computeInfluencerPerformance(id);
+      } catch (e) {
+        console.error(`[API] Performance calc error for influencer ${id}:`, e);
+      }
+      res.json({ ...influencer, performance });
     } catch (error) {
       console.error("[API] Get influencer error:", error);
       res.status(500).json({ error: "Failed to get influencer" });
@@ -379,7 +406,7 @@ export async function registerRoutes(
 
   app.get("/api/influencers/:id/tweets", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const tweets = await storage.getTweetsByInfluencer(id, 100);
       
       // Get all Ondo tickers for filtering
@@ -416,7 +443,7 @@ export async function registerRoutes(
 
   app.patch("/api/subscriptions/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const { enabled, amountOverrideUsd } = req.body;
       
       const updated = await storage.updateSubscription(id, { enabled, amountOverrideUsd });
@@ -429,7 +456,7 @@ export async function registerRoutes(
 
   app.delete("/api/subscriptions/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       await storage.deleteSubscription(id);
       res.status(204).send();
     } catch (error) {
@@ -446,10 +473,11 @@ export async function registerRoutes(
       const enriched = await Promise.all(userAlerts.map(async (ua) => {
         const alertEvent = await storage.getAlertEvent(ua.alertEventId);
         if (!alertEvent) return null;
-        
+
         const tweet = await storage.getTweet(alertEvent.tweetId);
         const influencer = tweet ? await storage.getInfluencer(tweet.influencerId) : null;
-        
+        const classification = await storage.getClassification(alertEvent.classificationId);
+
         return {
           id: ua.id,
           status: ua.status,
@@ -458,8 +486,11 @@ export async function registerRoutes(
           sentiment: alertEvent.sentiment,
           action: alertEvent.action,
           confidence: alertEvent.confidence,
+          priceUsdAtEvent: alertEvent.priceUsdAtEvent,
+          reason: (classification?.resultJson as any)?.reason ?? null,
           tweetText: tweet?.text,
           tweetUrl: tweet?.url,
+          tweetCreatedAt: tweet?.tweetCreatedAt,
           influencerHandle: influencer?.handle,
         };
       }));
@@ -839,7 +870,7 @@ export async function registerRoutes(
       
       res.json({
         ticker,
-        symbol: asset.symbol,
+        symbol: asset.ondoSymbol,
         inputMint: asset.solanaMint,
         outputMint: USDC_MINT,
         inputAmount: inputAmount.toFixed(6),
@@ -1602,8 +1633,32 @@ export async function registerRoutes(
             
             const asset = await storage.getAssetByTicker(alertEvent.ticker);
             if (!asset) throw new Error("Asset not found");
-            
-            const canAutoExecute = user.signerEnabled && 
+
+            // Daily spend cap guards the one-tap path: sum today's buys
+            // (completed or in flight) before letting another one through.
+            if (tradeAction === "BUY" && user.dailySpendCapUsd) {
+              const cap = parseFloat(user.dailySpendCapUsd);
+              const tradeAmountUsd = parseFloat(amount);
+              const todayStart = new Date();
+              todayStart.setUTCHours(0, 0, 0, 0);
+              const recentTrades = await storage.getTradesByUser(user.id, 200);
+              const spentToday = recentTrades
+                .filter(t => t.inputMint === USDC_MINT &&
+                             (t.status === "COMPLETED" || t.status === "PENDING") &&
+                             new Date(t.createdAt) >= todayStart)
+                .reduce((sum, t) => sum + parseInt(t.amountIn) / 1e6, 0);
+
+              if (spentToday + tradeAmountUsd > cap) {
+                await telegram.editMessageText(
+                  chatId,
+                  messageId,
+                  `${callback_query.message.text}\n\n🛑 Daily spend cap reached ($${spentToday.toFixed(2)} of $${cap.toFixed(2)} used today). Adjust it in Settings if you want to keep trading.`,
+                );
+                return res.status(200).send("OK");
+              }
+            }
+
+            const canAutoExecute = user.signerEnabled &&
                                    user.autoExecuteEnabled && 
                                    user.privyWalletId &&
                                    privyService.isAuthorizationKeyConfigured();
@@ -1885,7 +1940,7 @@ export async function registerRoutes(
 
   app.put("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const asset = await storage.updateAsset(id, req.body);
       res.json(asset);
     } catch (error) {
@@ -1896,7 +1951,7 @@ export async function registerRoutes(
 
   app.patch("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       const asset = await storage.updateAsset(id, req.body);
       res.json(asset);
     } catch (error) {
@@ -1907,7 +1962,7 @@ export async function registerRoutes(
 
   app.delete("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(String(req.params.id));
       await storage.deleteAsset(id);
       res.status(204).send();
     } catch (error) {

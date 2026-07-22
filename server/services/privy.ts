@@ -148,7 +148,7 @@ export async function signAndSendSolanaTransaction(
 export async function signSolanaTransaction(
   walletId: string,
   transactionBase64: string
-): Promise<{ signedTransaction: string } | { error: string }> {
+): Promise<{ signedTransaction: string } | { error: string; details?: unknown }> {
   try {
     if (!PRIVY_AUTHORIZATION_KEY) {
       return { error: "Server-side signing not configured. Missing authorization key." };
