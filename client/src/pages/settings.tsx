@@ -35,6 +35,7 @@ interface UserProfile {
   telegramChatId?: string;
   telegramUsername?: string;
   defaultBuyAmountUsd?: string;
+  dailySpendCapUsd?: string | null;
   autoExecuteEnabled?: boolean;
   signerEnabled?: boolean;
   privyWalletId?: string;
@@ -58,6 +59,7 @@ export default function Settings() {
   const { addSessionSigners } = useSessionSigners();
   const { toast } = useToast();
   const [defaultAmount, setDefaultAmount] = useState("10");
+  const [spendCap, setSpendCap] = useState("");
   const [isAddingSigner, setIsAddingSigner] = useState(false);
   const [copied, setCopied] = useState(false);
   const telegramPollRef = useRef<NodeJS.Timeout | null>(null);
@@ -114,6 +116,10 @@ export default function Settings() {
   }, [profile?.defaultBuyAmountUsd]);
 
   useEffect(() => {
+    setSpendCap(profile?.dailySpendCapUsd ?? "");
+  }, [profile?.dailySpendCapUsd]);
+
+  useEffect(() => {
     console.log("[Settings] Profile data:", profile);
     console.log("[Settings] Signer config:", signerConfig);
     console.log("[Settings] hasSessionSigner:", hasSessionSigner);
@@ -132,7 +138,11 @@ export default function Settings() {
   }, [profile?.telegramChatId, toast]);
 
   const updateProfileMutation = useMutation({
-    mutationFn: async (data: { defaultBuyAmountUsd?: string; autoExecuteEnabled?: boolean }) => {
+    mutationFn: async (data: {
+      defaultBuyAmountUsd?: string;
+      dailySpendCapUsd?: number | null;
+      autoExecuteEnabled?: boolean;
+    }) => {
       return await apiRequest("PATCH", "/api/user/profile", data);
     },
     onSuccess: () => {
@@ -280,6 +290,23 @@ export default function Settings() {
       return;
     }
     updateProfileMutation.mutate({ defaultBuyAmountUsd: defaultAmount });
+  };
+
+  const handleSaveSpendCap = () => {
+    const amount = parseFloat(spendCap);
+    if (isNaN(amount) || amount <= 0 || amount > 100000) {
+      toast({
+        title: "Invalid amount",
+        description: "Please enter a cap between $1 and $100,000",
+        variant: "destructive",
+      });
+      return;
+    }
+    updateProfileMutation.mutate({ dailySpendCapUsd: amount });
+  };
+
+  const handleClearSpendCap = () => {
+    updateProfileMutation.mutate({ dailySpendCapUsd: null });
   };
 
   const isSignerEnabled = profile?.signerEnabled || signerConfig?.signerEnabled;
@@ -452,6 +479,62 @@ export default function Settings() {
                     </div>
                   )}
                 </div>
+              )}
+            </div>
+
+            {/* Daily spend cap */}
+            <div>
+              <Label className="font-medium">Daily spend cap</Label>
+              <p className="text-xs text-muted-foreground mt-0.5 mb-3">
+                Hard limit on one-tap buys per day (UTC). Protects you if a bad signal slips through.
+              </p>
+              {profileLoading ? (
+                <Skeleton className="h-10 w-full" />
+              ) : (
+                <>
+                  <div className="flex gap-3">
+                    <div className="relative flex-1">
+                      <DollarSign className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        type="number"
+                        value={spendCap}
+                        onChange={(e) => setSpendCap(e.target.value)}
+                        placeholder="No cap"
+                        className="pl-9 text-num"
+                        min="1"
+                        max="100000"
+                        data-testid="input-spend-cap"
+                      />
+                    </div>
+                    <Button
+                      onClick={handleSaveSpendCap}
+                      disabled={updateProfileMutation.isPending}
+                      variant="outline"
+                      data-testid="button-save-spend-cap"
+                    >
+                      {updateProfileMutation.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        "Save"
+                      )}
+                    </Button>
+                    {profile?.dailySpendCapUsd != null && (
+                      <Button
+                        onClick={handleClearSpendCap}
+                        disabled={updateProfileMutation.isPending}
+                        variant="ghost"
+                        data-testid="button-clear-spend-cap"
+                      >
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  {isSignerEnabled && profile?.dailySpendCapUsd == null && (
+                    <p className="text-xs text-warning mt-2" data-testid="text-spend-cap-nudge">
+                      One-tap execution is on with no daily cap — setting one is recommended.
+                    </p>
+                  )}
+                </>
               )}
             </div>
           </CardContent>
