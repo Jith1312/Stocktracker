@@ -77,6 +77,7 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 - `AI_INTEGRATIONS_OPENAI_API_KEY` / `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI access for tweet classification (falls back to `OPENAI_API_KEY`/`OPENAI_BASE_URL`; without any key the classifier degrades to regex cashtag matching and mention-only alerts)
 - `CLASSIFIER_MODEL`: (Optional) model for classification, default `gpt-5.1`
 - `MIN_ALERT_CONFIDENCE`: (Optional) per-ticker confidence threshold for alerts, default `0.6`
+- `TWEET_POLL_MINUTES`: (Optional) tweet polling cadence, default `15`
 
 ## Key Features
 1. **Privy Authentication**: Email, wallet, Google, Twitter login with embedded Solana wallets
@@ -87,6 +88,12 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 6. **Portfolio Tracking**: View token balances and trade history
 7. **Admin Panel**: Manage asset registry (ticker → mint mappings)
 8. **One-Tap Trading**: Server-side trade execution via Privy delegated actions (optional)
+
+## Trader Performance & Guardrails
+- Alert events snapshot the token's USD price at signal time (Jupiter-quote derived, `alert_events.price_usd_at_event`); per-trader track records (avg return per call, win rate, hypothetical $10-per-call P&L) are computed on demand and exposed on `/api/subscriptions` and `/api/influencers/:id`
+- An hourly worker sends a Telegram "24h check-in" with real P&L for each completed buy (`trades.performance_notified_at` marks sent)
+- `users.daily_spend_cap_usd` (settable in Settings) hard-limits Telegram one-tap buys per UTC day
+- After schema changes run `npm run db:push` (adds the three columns above)
 
 ## Background Workers
 - **Tweet Polling**: Every 15 minutes, polls new tweets from tracked influencers
