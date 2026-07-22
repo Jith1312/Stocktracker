@@ -6,7 +6,8 @@ import { Connection, PublicKey, Transaction, SystemProgram } from "@solana/web3.
 import { createTransferInstruction, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, getAccount, getMint } from "@solana/spl-token";
 import { PrivyClient } from "@privy-io/server-auth";
 import { randomBytes } from "crypto";
-import { tweetProvider } from "./services/tweetProvider";
+import { tweetProvider, isNewerTweetId } from "./services/tweetProvider";
+import { syncFilterRules } from "./services/tweetFilterRules";
 import { classifyTweet, shouldCreateAlert } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
@@ -368,9 +369,12 @@ export async function registerRoutes(
       });
 
       // Trigger instant tweet poll for this influencer (don't await - run in background)
-      pollInfluencerTweets(influencer.id).catch(err => 
+      pollInfluencerTweets(influencer.id).catch(err =>
         console.error(`[API] Background poll error for influencer ${influencer.id}:`, err)
       );
+
+      // Keep twitterapi.io push rules in sync with who we track
+      syncFilterRules().catch(err => console.error("[API] Filter rule sync error:", err));
 
       // Send backfill alerts to the user for recent signals from this influencer
       sendBackfillAlerts(user.id, influencer.id).catch(err =>
@@ -447,6 +451,7 @@ export async function registerRoutes(
       const { enabled, amountOverrideUsd } = req.body;
       
       const updated = await storage.updateSubscription(id, { enabled, amountOverrideUsd });
+      syncFilterRules().catch(err => console.error("[API] Filter rule sync error:", err));
       res.json(updated);
     } catch (error) {
       console.error("[API] Update subscription error:", error);
@@ -458,6 +463,7 @@ export async function registerRoutes(
     try {
       const id = parseInt(String(req.params.id));
       await storage.deleteSubscription(id);
+      syncFilterRules().catch(err => console.error("[API] Filter rule sync error:", err));
       res.status(204).send();
     } catch (error) {
       console.error("[API] Delete subscription error:", error);
@@ -1160,7 +1166,7 @@ export async function registerRoutes(
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
-      const botUsername = "arenastocksbot";
+      const botUsername = process.env.TELEGRAM_BOT_USERNAME || "arenastocksbot";
       const deepLink = `https://t.me/${botUsername}?start=${token}`;
       
       res.json({ deepLink, token });
@@ -1914,6 +1920,62 @@ export async function registerRoutes(
       res.status(200).send("OK");
     } catch (error) {
       console.error("[Telegram] Webhook error:", error);
+      res.status(200).send("OK");
+    }
+  });
+
+  // Push delivery from twitterapi.io tweet-filter rules. Much cheaper than
+  // polling: only matched tweets are billed, and they arrive in near real time.
+  app.post("/api/twitter/webhook", async (req: Request, res: Response) => {
+    try {
+      const configuredKey = process.env.X_API_BEARER_TOKEN;
+      const receivedKey = req.headers["x-api-key"];
+      if (!configuredKey || receivedKey !== configuredKey) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const { event_type, tweets: incomingTweets } = req.body || {};
+      if (event_type !== "tweet" || !Array.isArray(incomingTweets)) {
+        return res.status(200).send("OK");
+      }
+
+      const influencers = await storage.getAllInfluencers();
+      const byHandle = new Map(influencers.map(i => [i.handle.toLowerCase(), i]));
+      let savedCount = 0;
+
+      for (const tweet of incomingTweets) {
+        const handle = (tweet.author?.userName || tweet.author?.username || "").toLowerCase();
+        const influencer = handle ? byHandle.get(handle) : undefined;
+        if (!influencer || !tweet.id || !tweet.text) continue;
+
+        const existing = await storage.getTweetByTweetId(tweet.id);
+        if (existing) continue;
+
+        await storage.createTweet({
+          influencerId: influencer.id,
+          tweetId: tweet.id,
+          text: tweet.text,
+          url: tweet.url || `https://x.com/${influencer.handle}/status/${tweet.id}`,
+          rawJson: tweet,
+          tweetCreatedAt: tweet.created_at ? new Date(tweet.created_at) : undefined,
+        });
+        savedCount++;
+
+        if (isNewerTweetId(tweet.id, influencer.lastTweetId)) {
+          await storage.updateInfluencer(influencer.id, {
+            lastTweetId: tweet.id,
+            lastPolledAt: new Date(),
+          });
+          influencer.lastTweetId = tweet.id;
+        }
+      }
+
+      if (savedCount > 0) {
+        console.log(`[TwitterWebhook] Saved ${savedCount} pushed tweet(s); classification worker will pick them up`);
+      }
+      res.status(200).send("OK");
+    } catch (error) {
+      console.error("[TwitterWebhook] Error:", error);
       res.status(200).send("OK");
     }
   });

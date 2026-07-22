@@ -29,6 +29,7 @@ export interface IStorage {
   getInfluencer(id: number): Promise<Influencer | undefined>;
   getInfluencerByHandle(handle: string): Promise<Influencer | undefined>;
   getAllInfluencers(): Promise<Influencer[]>;
+  getInfluencersWithActiveSubscribers(): Promise<Influencer[]>;
   createInfluencer(influencer: InsertInfluencer): Promise<Influencer>;
   updateInfluencer(id: number, data: Partial<Influencer>): Promise<Influencer | undefined>;
 
@@ -124,6 +125,28 @@ export class DatabaseStorage implements IStorage {
   async getInfluencerByHandle(handle: string): Promise<Influencer | undefined> {
     const [influencer] = await db.select().from(influencers).where(eq(influencers.handle, handle));
     return influencer;
+  }
+
+  // Influencers at least one user actively subscribes to — the only ones
+  // worth spending tweet-API credits on.
+  async getInfluencersWithActiveSubscribers(): Promise<Influencer[]> {
+    const rows = await db
+      .selectDistinct({
+        id: influencers.id,
+        platform: influencers.platform,
+        handle: influencers.handle,
+        profileUrl: influencers.profileUrl,
+        platformUserId: influencers.platformUserId,
+        displayName: influencers.displayName,
+        avatarUrl: influencers.avatarUrl,
+        lastTweetId: influencers.lastTweetId,
+        lastPolledAt: influencers.lastPolledAt,
+        createdAt: influencers.createdAt,
+      })
+      .from(influencers)
+      .innerJoin(subscriptions, eq(subscriptions.influencerId, influencers.id))
+      .where(eq(subscriptions.enabled, true));
+    return rows;
   }
 
   async getAllInfluencers(): Promise<Influencer[]> {
