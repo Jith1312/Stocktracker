@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { storage } from "../storage";
-import { tweetProvider } from "../services/tweetProvider";
+import { tweetProvider, isNewerTweetId } from "../services/tweetProvider";
+import { syncFilterRules } from "../services/tweetFilterRules";
 import { classifyTweet, getAlertableTickers, getClassifierModel } from "../services/classifier";
 import * as telegram from "../services/telegram";
 import * as jupiter from "../services/jupiter";
@@ -159,7 +160,7 @@ export async function pollInfluencerTweets(influencerId: number): Promise<number
       });
       savedCount++;
 
-      if (!latestTweetId || tweetData.tweetId > latestTweetId) {
+      if (isNewerTweetId(tweetData.tweetId, latestTweetId)) {
         latestTweetId = tweetData.tweetId;
       }
     }
@@ -181,8 +182,9 @@ async function pollTweetsWorker() {
   console.log("[Worker] Starting tweet poll...");
   
   try {
-    const influencers = await storage.getAllInfluencers();
-    
+    // Only spend API credits on influencers someone actually subscribes to
+    const influencers = await storage.getInfluencersWithActiveSubscribers();
+
     for (const influencer of influencers) {
       try {
         const tweets = await tweetProvider.fetchTweets(
@@ -208,7 +210,7 @@ async function pollTweetsWorker() {
             tweetCreatedAt: tweetData.createdAt,
           });
 
-          if (!latestTweetId || tweetData.tweetId > latestTweetId) {
+          if (isNewerTweetId(tweetData.tweetId, latestTweetId)) {
             latestTweetId = tweetData.tweetId;
           }
         }
@@ -475,9 +477,13 @@ export function startWorkers() {
 
   setupTelegramWebhook();
 
-  const pollMinutes = Math.max(1, parseInt(process.env.TWEET_POLL_MINUTES || "15"));
+  // Polling is the fallback/backfill path; the twitterapi.io webhook rules
+  // (see services/tweetFilterRules.ts) deliver tweets in near real time.
+  const pollMinutes = Math.max(1, parseInt(process.env.TWEET_POLL_MINUTES || "30"));
   cron.schedule(`*/${pollMinutes} * * * *`, pollTweetsWorker);
   console.log(`[Workers] Tweet poll job scheduled (every ${pollMinutes} minutes)`);
+
+  syncFilterRules().catch(err => console.error("[Workers] Filter rule sync error:", err));
 
   cron.schedule("*/1 * * * *", classifyTweetsWorker);
   console.log("[Workers] Classification job scheduled (every 1 minute)");

@@ -77,7 +77,9 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 - `AI_INTEGRATIONS_OPENAI_API_KEY` / `AI_INTEGRATIONS_OPENAI_BASE_URL`: OpenAI access for tweet classification (falls back to `OPENAI_API_KEY`/`OPENAI_BASE_URL`; without any key the classifier degrades to regex cashtag matching and mention-only alerts)
 - `CLASSIFIER_MODEL`: (Optional) model for classification, default `gpt-5.1`
 - `MIN_ALERT_CONFIDENCE`: (Optional) per-ticker confidence threshold for alerts, default `0.6`
-- `TWEET_POLL_MINUTES`: (Optional) tweet polling cadence, default `15`
+- `TWEET_POLL_MINUTES`: (Optional) fallback tweet polling cadence, default `30`
+- `TWITTER_RULE_INTERVAL_SECONDS`: (Optional) twitterapi.io filter-rule check interval, default `120` (min 100)
+- `TELEGRAM_BOT_USERNAME`: (Optional) bot username for deep links, default `arenastocksbot`
 
 ## Key Features
 1. **Privy Authentication**: Email, wallet, Google, Twitter login with embedded Solana wallets
@@ -95,8 +97,12 @@ Arena is a trading alert application that monitors X (Twitter) influencer accoun
 - `users.daily_spend_cap_usd` (settable in Settings) hard-limits Telegram one-tap buys per UTC day
 - After schema changes run `npm run db:push` (adds the three columns above)
 
+## Tweet Ingestion (two paths)
+1. **Push (primary, cheap)**: the server maintains twitterapi.io tweet-filter rules (`from:handle OR ...`, tagged `arena-traders-N`) covering every influencer with an active subscriber; matched tweets are billed individually ($0.15/1k) and POSTed to `/api/twitter/webhook` (authenticated by `X-API-Key` = `X_API_BEARER_TOKEN`). Rules sync automatically on startup and whenever influencers/subscriptions change. **One-time manual step: set each rule's Webhook URL to `https://<your-domain>/api/twitter/webhook` on the twitterapi.io dashboard** (their API has no webhook_url field).
+2. **Polling (fallback/backfill)**: every `TWEET_POLL_MINUTES` (default 30) via `last_tweets` — each call bills ~20 tweets (~$0.003) regardless of new content, and only influencers with active subscribers are polled.
+
 ## Background Workers
-- **Tweet Polling**: Every 15 minutes, polls new tweets from tracked influencers
+- **Tweet Polling**: fallback cadence as above
 - **Classification**: Every 1 minute, classifies unprocessed tweets via GPT (structured output: per-ticker sentiment BULLISH/BEARISH/NEUTRAL, action BUY/SELL/NONE, confidence). Only directional signals ≥ MIN_ALERT_CONFIDENCE become alert events; without an AI key, cashtag mentions alert as neutral "MENTION"s
 - **Alert Distribution**: Sends action-aware Telegram alerts (BUY/SELL signal headline, confidence, AI reason) with direction-ordered trade buttons
 

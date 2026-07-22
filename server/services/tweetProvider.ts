@@ -11,6 +11,17 @@ export interface TweetProvider {
   getUserInfo(handle: string): Promise<{ userId?: string; displayName?: string; avatarUrl?: string } | null>;
 }
 
+// Tweet IDs are numeric strings (snowflakes). Lexicographic comparison breaks
+// across digit-length boundaries ("99..." > "100...") so compare as BigInt.
+export function isNewerTweetId(candidate: string, reference?: string | null): boolean {
+  if (!reference) return true;
+  try {
+    return BigInt(candidate) > BigInt(reference);
+  } catch {
+    return candidate > reference;
+  }
+}
+
 export class StubTweetProvider implements TweetProvider {
   async fetchTweets(handle: string, sinceId?: string): Promise<TweetData[]> {
     console.log(`[StubTweetProvider] Would fetch tweets for @${handle} since ${sinceId || "beginning"}`);
@@ -98,8 +109,7 @@ export class TwitterApiIoProvider implements TweetProvider {
       const tweets = tweetsArray
         .filter((tweet: any) => {
           if (!tweet.id || !tweet.text) return false;
-          if (!sinceId) return true;
-          return tweet.id > sinceId;
+          return isNewerTweetId(tweet.id, sinceId);
         })
         .map((tweet: any) => ({
           tweetId: tweet.id,
