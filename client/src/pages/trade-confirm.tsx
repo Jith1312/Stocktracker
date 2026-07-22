@@ -13,6 +13,7 @@ import {
   AlertCircle,
   ExternalLink,
   CircleCheck,
+  Clock,
 } from "lucide-react";
 import { SiSolana } from "react-icons/si";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -37,6 +38,40 @@ interface AlertItem {
   tweetText?: string;
   tweetUrl?: string;
   influencerHandle?: string;
+  reason?: string | null;
+  priceUsdAtEvent?: string | null;
+  tweetCreatedAt?: string | null;
+}
+
+interface HoldingItem {
+  mint: string;
+  symbol: string;
+  underlyingTicker: string;
+  balance: string;
+  usdValue: number | null;
+  price: number | null;
+  avgCostBasis: number | null;
+  totalCostBasis: number | null;
+  profitLoss: number | null;
+  profitLossPct: number | null;
+}
+
+interface HoldingsResponse {
+  holdings: HoldingItem[];
+  usdcBalance: number;
+  totalValue: number;
+}
+
+interface TradeItem {
+  id: number;
+  status: string;
+  isBuy: boolean;
+  inputTicker: string;
+  outputTicker: string;
+  inputAmountDisplay: string;
+  outputAmountDisplay: string | null;
+  createdAt?: string;
+  txSig?: string | null;
 }
 
 const statusCopy: Record<string, string> = {
@@ -44,6 +79,14 @@ const statusCopy: Record<string, string> = {
   signing: "Waiting for signature",
   confirming: "Confirming on Solana",
 };
+
+/** Compact age like "4m", "2h", "3d". */
+function shortAge(minutes: number): string {
+  if (minutes < 60) return `${Math.max(minutes, 1)}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
 
 export default function TradeConfirm() {
   const search = useSearch();
@@ -72,6 +115,59 @@ export default function TradeConfirm() {
   const signalAlert = alertId
     ? alerts?.find((a) => a.id === parseInt(alertId))
     : undefined;
+
+  // Position context (read-only, for display) — degrade silently when missing
+  const { data: portfolioData } = useQuery<HoldingsResponse>({
+    queryKey: ["/api/portfolio/holdings"],
+    enabled: !!alertId,
+  });
+  const { data: trades } = useQuery<TradeItem[]>({
+    queryKey: ["/api/trades"],
+    enabled: !!alertId,
+  });
+
+  const signalTicker = signalAlert?.ticker;
+  const heldPosition =
+    signalTicker && portfolioData?.holdings
+      ? portfolioData.holdings.find(
+          (h) => h.underlyingTicker === signalTicker && parseFloat(h.balance) > 0,
+        )
+      : undefined;
+
+  // Average entry from COMPLETED buy trades: sum USDC in / sum tokens out
+  let avgEntryPrice: number | null = null;
+  if (signalTicker && trades) {
+    const completedBuys = trades.filter(
+      (t) =>
+        t.isBuy &&
+        t.status === "COMPLETED" &&
+        t.outputTicker === signalTicker &&
+        t.outputAmountDisplay != null,
+    );
+    const usdcIn = completedBuys.reduce(
+      (sum, t) => sum + (parseFloat(t.inputAmountDisplay) || 0),
+      0,
+    );
+    const tokensOut = completedBuys.reduce(
+      (sum, t) => sum + (parseFloat(t.outputAmountDisplay!) || 0),
+      0,
+    );
+    if (usdcIn > 0 && tokensOut > 0) {
+      avgEntryPrice = usdcIn / tokensOut;
+    }
+  }
+  const currentPrice = heldPosition?.price ?? null;
+
+  // Signal age from the influencer's post time (fall back to alert creation)
+  const signalTimestamp = signalAlert?.tweetCreatedAt || signalAlert?.createdAt;
+  let signalAgeMinutes: number | null = null;
+  if (signalTimestamp) {
+    const ageMs = Date.now() - new Date(signalTimestamp).getTime();
+    if (!Number.isNaN(ageMs) && ageMs >= 0) {
+      signalAgeMinutes = Math.floor(ageMs / 60000);
+    }
+  }
+  const isStaleSignal = signalAgeMinutes != null && signalAgeMinutes > 30;
 
   const prepareMutation = useMutation({
     mutationFn: (data: { alertId: string; amount: string }) =>
@@ -155,7 +251,31 @@ export default function TradeConfirm() {
                 {signalAlert.tweetText}
               </p>
             )}
+            {signalAlert?.reason && (
+              <p className="relative text-xs text-muted-foreground mt-2" data-testid="text-signal-reason">
+                AI: {signalAlert.reason}
+              </p>
+            )}
+            {signalAgeMinutes != null && (
+              <p className="relative text-[11px] text-muted-foreground mt-2" data-testid="text-signal-age">
+                posted <span className="text-num">{shortAge(signalAgeMinutes)}</span> ago
+              </p>
+            )}
           </div>
+
+          {/* Staleness warning */}
+          {isStaleSignal && signalAgeMinutes != null && (
+            <div
+              className="border-b border-card-border bg-warning/10 px-5 py-2.5 flex items-center gap-2"
+              data-testid="row-stale-warning"
+            >
+              <Clock className="w-3.5 h-3.5 text-warning shrink-0" />
+              <p className="text-xs text-warning">
+                This call is over <span className="text-num">{shortAge(signalAgeMinutes)}</span> old
+                — price may have moved since.
+              </p>
+            </div>
+          )}
 
           <CardContent className="p-5 space-y-6">
             {isLoading ? (
@@ -185,6 +305,39 @@ export default function TradeConfirm() {
                     </p>
                   </div>
                 </div>
+
+                {/* Your position */}
+                {heldPosition && (
+                  <div
+                    className="rounded-lg border border-border px-3 py-2.5 text-sm space-y-1.5"
+                    data-testid="row-your-position"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-[11px] uppercase tracking-widest text-muted-foreground">
+                        Your position
+                      </span>
+                      <span className="text-num">
+                        {heldPosition.balance}{" "}
+                        <span className="font-mono text-muted-foreground">{heldPosition.symbol}</span>
+                        {heldPosition.usdValue != null && (
+                          <> · ${heldPosition.usdValue.toFixed(2)}</>
+                        )}
+                      </span>
+                    </div>
+                    {avgEntryPrice != null && currentPrice != null && (
+                      <div className="flex items-center justify-between gap-3 text-xs">
+                        <span className="text-muted-foreground">Avg entry</span>
+                        <span className="text-num">
+                          ${avgEntryPrice.toFixed(2)}{" "}
+                          <span className="text-muted-foreground">vs now</span>{" "}
+                          <span className={currentPrice >= avgEntryPrice ? "text-bull" : "text-bear"}>
+                            ${currentPrice.toFixed(2)}
+                          </span>
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Amount selection */}
                 <div>

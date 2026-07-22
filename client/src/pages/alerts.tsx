@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
   X,
   AlertCircle,
   Plus,
+  ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "wouter";
@@ -29,6 +31,9 @@ interface AlertItem {
   tweetText?: string | null;
   tweetUrl?: string | null;
   influencerHandle?: string | null;
+  reason?: string | null;
+  priceUsdAtEvent?: string | null;
+  tweetCreatedAt?: string | null;
 }
 
 const statusStyles: Record<string, string> = {
@@ -57,6 +62,10 @@ const statusLabels: Record<string, string> = {
 
 function SignalRow({ alert }: { alert: AlertItem }) {
   const StatusIcon = statusIcons[alert.status] || Bell;
+  const [showReason, setShowReason] = useState(false);
+
+  // Prefer the influencer's actual post time over alert creation time
+  const signalTime = alert.tweetCreatedAt || alert.createdAt;
 
   return (
     <div
@@ -83,7 +92,8 @@ function SignalRow({ alert }: { alert: AlertItem }) {
           )}
           {alert.influencerHandle && " · "}
           <span className="text-num">
-            {formatDistanceToNow(new Date(alert.createdAt), { addSuffix: true })}
+            {alert.tweetCreatedAt ? "posted " : ""}
+            {formatDistanceToNow(new Date(signalTime), { addSuffix: true })}
           </span>
         </p>
 
@@ -93,16 +103,43 @@ function SignalRow({ alert }: { alert: AlertItem }) {
           </p>
         )}
 
-        {alert.tweetUrl && (
-          <a
-            href={alert.tweetUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        {(alert.reason || alert.tweetUrl) && (
+          <div className="flex items-center gap-3 flex-wrap">
+            {alert.reason && (
+              <button
+                type="button"
+                onClick={() => setShowReason((v) => !v)}
+                aria-expanded={showReason}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                data-testid={`button-why-signal-${alert.id}`}
+              >
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform ${showReason ? "rotate-180" : ""}`}
+                />
+                Why this signal?
+              </button>
+            )}
+            {alert.tweetUrl && (
+              <a
+                href={alert.tweetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                View post
+              </a>
+            )}
+          </div>
+        )}
+
+        {alert.reason && showReason && (
+          <p
+            className="text-xs text-muted-foreground border-l-2 border-primary/40 pl-2.5"
+            data-testid={`text-signal-reason-${alert.id}`}
           >
-            <ExternalLink className="w-3 h-3" />
-            View post
-          </a>
+            {alert.reason}
+          </p>
         )}
       </div>
 
