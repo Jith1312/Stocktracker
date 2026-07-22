@@ -12,11 +12,24 @@ import {
   Bell,
   Clock,
   RefreshCw,
+  TrendingUp,
+  Target,
+  DollarSign,
 } from "lucide-react";
 import { SiX } from "react-icons/si";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SignalBadge } from "@/components/SignalBadge";
 import { formatDistanceToNow } from "date-fns";
+
+interface InfluencerPerformance {
+  signalCount: number;
+  buyCount: number;
+  sellCount: number;
+  trackedCount: number;
+  avgReturnPct: number | null;
+  winRate: number | null;
+  hypotheticalPnlUsd: number | null;
+}
 
 interface InfluencerDetail {
   id: number;
@@ -29,6 +42,20 @@ interface InfluencerDetail {
   createdAt: string;
   alertCount?: number;
   tweetCount?: number;
+  performance?: InfluencerPerformance | null;
+}
+
+function formatPct(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function formatUsd(value: number): string {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
+function signClass(value: number): string {
+  return value > 0 ? "text-bull" : value < 0 ? "text-bear" : "text-foreground";
 }
 
 interface TickerCall {
@@ -97,6 +124,9 @@ export default function InfluencerDetail() {
     );
   }
 
+  const perf = influencer?.performance;
+  const hasTrackRecord = !!perf && perf.trackedCount > 0;
+
   const stats = [
     {
       label: "Signals",
@@ -116,6 +146,54 @@ export default function InfluencerDetail() {
           {influencer?.lastPolledAt
             ? formatDistanceToNow(new Date(influencer.lastPolledAt), { addSuffix: true })
             : "Never"}
+        </span>
+      ),
+    },
+    {
+      label: "Avg return / call",
+      icon: TrendingUp,
+      value: (
+        <span
+          className={`text-num text-xl md:text-2xl font-semibold ${
+            hasTrackRecord && perf.avgReturnPct != null
+              ? signClass(perf.avgReturnPct)
+              : "text-muted-foreground"
+          }`}
+          data-testid="stat-avg-return"
+        >
+          {hasTrackRecord && perf.avgReturnPct != null ? formatPct(perf.avgReturnPct) : "—"}
+        </span>
+      ),
+    },
+    {
+      label: "Win rate",
+      icon: Target,
+      value: (
+        <span
+          className={`text-num text-xl md:text-2xl font-semibold ${
+            hasTrackRecord && perf.winRate != null ? "" : "text-muted-foreground"
+          }`}
+          data-testid="stat-win-rate"
+        >
+          {hasTrackRecord && perf.winRate != null ? `${perf.winRate.toFixed(0)}%` : "—"}
+        </span>
+      ),
+    },
+    {
+      label: "$10/call →",
+      icon: DollarSign,
+      value: (
+        <span
+          className={`text-num text-xl md:text-2xl font-semibold ${
+            hasTrackRecord && perf.hypotheticalPnlUsd != null
+              ? signClass(perf.hypotheticalPnlUsd)
+              : "text-muted-foreground"
+          }`}
+          data-testid="stat-hypothetical-pnl"
+        >
+          {hasTrackRecord && perf.hypotheticalPnlUsd != null
+            ? formatUsd(perf.hypotheticalPnlUsd)
+            : "—"}
         </span>
       ),
     },
@@ -170,7 +248,7 @@ export default function InfluencerDetail() {
             </div>
 
             {/* Stats */}
-            <div className="mt-6 grid grid-cols-3 gap-3">
+            <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 gap-3">
               {stats.map((stat) => (
                 <div key={stat.label} className="rounded-lg border border-border bg-card/60 p-3 md:p-4">
                   <div className="flex items-center justify-between">
@@ -181,6 +259,11 @@ export default function InfluencerDetail() {
                 </div>
               ))}
             </div>
+            {!hasTrackRecord && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                No track record yet — signals are tracked from the moment you follow
+              </p>
+            )}
           </div>
         </div>
 

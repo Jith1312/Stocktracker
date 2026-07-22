@@ -45,6 +45,16 @@ interface Influencer {
   createdAt: string;
 }
 
+interface InfluencerPerformance {
+  signalCount: number;
+  buyCount: number;
+  sellCount: number;
+  trackedCount: number;
+  avgReturnPct: number | null;
+  winRate: number | null;
+  hypotheticalPnlUsd: number | null;
+}
+
 interface Subscription {
   id: number;
   userId: number;
@@ -55,6 +65,20 @@ interface Subscription {
   influencer?: Influencer;
   alertCount?: number;
   tradeCount?: number;
+  performance?: InfluencerPerformance | null;
+}
+
+function formatPct(value: number): string {
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function formatUsd(value: number): string {
+  const sign = value > 0 ? "+" : value < 0 ? "-" : "";
+  return `${sign}$${Math.abs(value).toFixed(2)}`;
+}
+
+function signClass(value: number): string {
+  return value > 0 ? "text-bull" : value < 0 ? "text-bear" : "text-foreground";
 }
 
 export default function Influencers() {
@@ -114,6 +138,19 @@ export default function Influencers() {
   };
 
   const focusAddInput = () => form.setFocus("profileUrl");
+
+  // Leaderboard order: best avg return per call first, traders without a
+  // track record last (original order preserved between them).
+  const rankedSubscriptions = subscriptions
+    ? [...subscriptions].sort((a, b) => {
+        const aReturn = a.performance?.avgReturnPct ?? null;
+        const bReturn = b.performance?.avgReturnPct ?? null;
+        if (aReturn == null && bReturn == null) return 0;
+        if (aReturn == null) return 1;
+        if (bReturn == null) return -1;
+        return bReturn - aReturn;
+      })
+    : [];
 
   return (
     <AppLayout>
@@ -191,13 +228,16 @@ export default function Influencers() {
           </div>
         ) : subscriptions && subscriptions.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {subscriptions.map((sub) => (
+            {rankedSubscriptions.map((sub, index) => {
+              const perf = sub.performance;
+              const hasTrackRecord = !!perf && perf.trackedCount > 0;
+              return (
               <Card key={sub.id} className="rise-in hover-elevate" data-testid={`influencer-card-${sub.id}`}>
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between gap-3">
                     <Link href={`/influencers/${sub.influencerId}`}>
                       <div className="flex items-center gap-3 min-w-0 cursor-pointer">
-                        <Avatar className="w-11 h-11 border border-border">
+                        <Avatar className="w-11 h-11 border border-border shrink-0">
                           <AvatarImage src={sub.influencer?.avatarUrl ?? undefined} />
                           <AvatarFallback className="bg-primary/10 text-primary">
                             <SiX className="w-4 h-4" />
@@ -208,6 +248,9 @@ export default function Influencers() {
                             {sub.influencer?.displayName || sub.influencer?.handle}
                           </h3>
                           <p className="text-xs text-muted-foreground font-mono truncate">
+                            <span className="text-num text-[10px] text-muted-foreground/70 mr-1.5">
+                              #{index + 1}
+                            </span>
                             @{sub.influencer?.handle}
                           </p>
                         </div>
@@ -226,7 +269,47 @@ export default function Influencers() {
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
+                  {/* Track record */}
+                  <div className="mt-4 pt-3 border-t border-border">
+                    {hasTrackRecord ? (
+                      <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1.5">
+                          Avg/call
+                          <span
+                            className={`text-num font-semibold ${
+                              perf.avgReturnPct != null ? signClass(perf.avgReturnPct) : "text-muted-foreground"
+                            }`}
+                          >
+                            {perf.avgReturnPct != null ? formatPct(perf.avgReturnPct) : "—"}
+                          </span>
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          Win
+                          <span className="text-num font-semibold text-foreground">
+                            {perf.winRate != null ? `${perf.winRate.toFixed(0)}%` : "—"}
+                          </span>
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="text-num">$10</span>/call →
+                          <span
+                            className={`text-num font-semibold ${
+                              perf.hypotheticalPnlUsd != null
+                                ? signClass(perf.hypotheticalPnlUsd)
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {perf.hypotheticalPnlUsd != null ? formatUsd(perf.hypotheticalPnlUsd) : "—"}
+                          </span>
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No track record yet — signals are tracked from the moment you follow
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-border flex items-center justify-between">
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
                       <span className="flex items-center gap-1.5">
                         <Bell className="w-3.5 h-3.5" />
@@ -258,7 +341,8 @@ export default function Influencers() {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <Card className="rise-in">
