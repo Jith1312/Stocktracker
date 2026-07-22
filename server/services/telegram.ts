@@ -111,22 +111,33 @@ export function formatAlertMessage(
   confidence: number,
   tweetExcerpt: string,
   tweetUrl: string,
-  tweetDate?: Date
+  tweetDate?: Date,
+  reason?: string
 ): string {
-  const dateStr = tweetDate 
-    ? tweetDate.toLocaleString("en-US", { 
-        month: "short", 
-        day: "numeric", 
-        hour: "numeric", 
+  const dateStr = tweetDate
+    ? tweetDate.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
         minute: "2-digit",
-        hour12: true 
+        hour12: true
       })
     : "";
-  
-  return `📢 <b>$${ticker} Mentioned!</b>
+
+  const headline =
+    action === "BUY" ? `🟢 <b>BUY SIGNAL: $${ticker}</b>` :
+    action === "SELL" ? `🔴 <b>SELL SIGNAL: $${ticker}</b>` :
+    `📢 <b>$${ticker} Mentioned</b>`;
+
+  const confidencePct = Math.round(confidence * 100);
+  const confidenceLine = action === "BUY" || action === "SELL"
+    ? `\n🎯 Confidence: ${confidencePct}%${reason ? `\n💡 ${reason}` : ""}\n`
+    : "";
+
+  return `${headline}
 
 👤 From: @${influencerHandle}${dateStr ? ` • ${dateStr}` : ""}
-
+${confidenceLine}
 "${tweetExcerpt.slice(0, 250)}${tweetExcerpt.length > 250 ? "..." : ""}"
 
 <a href="${tweetUrl}">View Tweet</a>`;
@@ -140,18 +151,22 @@ export function createTradeButtons(
   userHoldsStock: boolean = false
 ): InlineKeyboardButton[][] {
   const amounts = [defaultAmount, defaultAmount * 2.5];
-  
-  const buttons: InlineKeyboardButton[][] = [
-    [
-      { text: `🟢 Buy $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:BUY` },
-      { text: `🟢 Buy $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:BUY` },
-    ],
+
+  const buyRow: InlineKeyboardButton[] = [
+    { text: `🟢 Buy $${amounts[0]}`, callback_data: `trade:${userAlertId}:${amounts[0]}:BUY` },
+    { text: `🟢 Buy $${amounts[1]}`, callback_data: `trade:${userAlertId}:${amounts[1]}:BUY` },
   ];
-  
-  if (userHoldsStock) {
-    buttons.push([
-      { text: `🔴 Sell All`, callback_data: `trade:${userAlertId}:ALL:SELL` },
-    ]);
+  const sellRow: InlineKeyboardButton[] = [
+    { text: `🔴 Sell All`, callback_data: `trade:${userAlertId}:ALL:SELL` },
+  ];
+
+  // Lead with the row matching the signal direction
+  const buttons: InlineKeyboardButton[][] = [];
+  if (action === "SELL" && userHoldsStock) {
+    buttons.push(sellRow, buyRow);
+  } else {
+    buttons.push(buyRow);
+    if (userHoldsStock) buttons.push(sellRow);
   }
   
   buttons.push([

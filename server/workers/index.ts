@@ -1,7 +1,7 @@
 import cron from "node-cron";
 import { storage } from "../storage";
 import { tweetProvider } from "../services/tweetProvider";
-import { classifyTweet, shouldCreateAlert } from "../services/classifier";
+import { classifyTweet, getAlertableTickers, getClassifierModel } from "../services/classifier";
 import * as telegram from "../services/telegram";
 import * as jupiter from "../services/jupiter";
 import { Connection } from "@solana/web3.js";
@@ -237,42 +237,38 @@ async function classifyTweetsWorker() {
       try {
         const result = await classifyTweet(tweet.text);
 
-        await storage.createClassification({
+        const classification = await storage.createClassification({
           tweetId: tweet.id,
           isActionable: result.is_actionable,
           overallConfidence: result.overall_confidence.toString(),
           resultJson: result,
-          model: "gpt-5.1",
+          model: getClassifierModel(),
         });
 
-        console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable}`);
+        console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable} (${result.reason})`);
 
-        if (await shouldCreateAlert(result)) {
-          for (const ticker of result.tickers) {
-            const tickerSymbol = ticker.symbol;
-            const asset = await storage.getAssetByTicker(tickerSymbol);
-            if (!asset?.isActive) continue;
+        for (const ticker of getAlertableTickers(result)) {
+          const tickerSymbol = ticker.symbol;
+          const asset = await storage.getAssetByTicker(tickerSymbol);
+          if (!asset?.isActive) continue;
 
-            const classification = await storage.getClassificationByTweetId(tweet.id);
-            if (!classification) continue;
+          const alertEvent = await storage.createAlertEvent({
+            tweetId: tweet.id,
+            classificationId: classification.id,
+            ticker: tickerSymbol,
+            sentiment: ticker.sentiment,
+            action: ticker.action,
+            confidence: ticker.confidence.toString(),
+          });
 
-            const alertEvent = await storage.createAlertEvent({
-              tweetId: tweet.id,
-              classificationId: classification.id,
-              ticker: tickerSymbol,
-              sentiment: ticker.sentiment || "NEUTRAL",
-              action: "NONE",
-              confidence: ticker.confidence?.toString() || "1.0",
-            });
+          console.log(`[Worker] Created alert event for $${tickerSymbol}: ${ticker.action} (${ticker.sentiment}, ${ticker.confidence})`);
 
-            console.log(`[Worker] Created alert event for $${tickerSymbol}`);
-
-            await sendAlertsForEvent(alertEvent.id, tweet, { 
-              symbol: tickerSymbol, 
-              action: "NONE", 
-              confidence: ticker.confidence || 1.0 
-            });
-          }
+          await sendAlertsForEvent(alertEvent.id, tweet, {
+            symbol: tickerSymbol,
+            action: ticker.action,
+            confidence: ticker.confidence,
+            reason: result.reason,
+          });
         }
       } catch (error) {
         console.error(`[Worker] Error classifying tweet ${tweet.id}:`, error);
@@ -286,7 +282,7 @@ async function classifyTweetsWorker() {
 async function sendAlertsForEvent(
   alertEventId: number,
   tweet: any,
-  ticker: { symbol: string; action: string; confidence: number }
+  ticker: { symbol: string; action: string; confidence: number; reason?: string }
 ) {
   try {
     const influencer = await storage.getInfluencer(tweet.influencerId);
@@ -320,7 +316,8 @@ async function sendAlertsForEvent(
         ticker.confidence,
         tweet.text,
         tweet.url,
-        tweet.tweetCreatedAt || tweet.ingestedAt
+        tweet.tweetCreatedAt || tweet.ingestedAt,
+        ticker.reason
       );
 
       const defaultAmount = parseFloat(user.defaultBuyAmountUsd || "10");

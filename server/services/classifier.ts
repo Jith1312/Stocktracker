@@ -1,55 +1,180 @@
+import OpenAI from "openai";
 import { storage } from "../storage";
-import type { ClassificationResult } from "@shared/schema";
+import { classificationResultSchema, type ClassificationResult } from "@shared/schema";
+
+const AI_MODEL = process.env.CLASSIFIER_MODEL || "gpt-5.1";
+
+// Minimum per-ticker confidence for a signal to become an alert event
+export const MIN_ALERT_CONFIDENCE = parseFloat(process.env.MIN_ALERT_CONFIDENCE || "0.6");
+
+let openaiClient: OpenAI | null | undefined;
+
+function getOpenAI(): OpenAI | null {
+  if (openaiClient !== undefined) return openaiClient;
+
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL;
+
+  if (!apiKey) {
+    console.warn("[Classifier] No OpenAI API key configured — falling back to regex ticker matching");
+    openaiClient = null;
+  } else {
+    openaiClient = new OpenAI({ apiKey, baseURL });
+  }
+  return openaiClient;
+}
+
+export function getClassifierModel(): string {
+  return getOpenAI() ? AI_MODEL : "regex-fallback";
+}
+
+const SYSTEM_PROMPT = `You are a trading-signal analyst. You read a single post from a financial influencer on X (Twitter) and decide whether it contains an actionable trading signal for any of the supported stock tickers.
+
+Rules:
+- Only report tickers from the supported list. Match cashtags ($TSLA), bare tickers (TSLA), and company names (Tesla → TSLA).
+- sentiment: BULLISH if the author expresses a positive view on the stock, BEARISH for a negative view, NEUTRAL for a mere mention with no directional view.
+- action: BUY only if the author clearly recommends, announces, or strongly implies buying/entering a long position. SELL for selling/exiting/shorting. NONE for commentary, questions, news reposts, or ambiguous takes.
+- is_actionable: true only if at least one ticker has action BUY or SELL.
+- confidence (0-1): how confident you are in the ticker's sentiment/action reading. Sarcasm, jokes, hypotheticals, questions, engagement bait, and old-news commentary should sharply reduce confidence or result in action NONE.
+- Ignore giveaways, spam, promotions of courses/newsletters, and pure price observations with no view.
+- reason: one concise sentence explaining the decision.
+
+Respond with JSON matching the provided schema.`;
+
+const RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    is_actionable: { type: "boolean" },
+    tickers: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          symbol: { type: "string" },
+          sentiment: { type: "string", enum: ["BULLISH", "BEARISH", "NEUTRAL"] },
+          action: { type: "string", enum: ["BUY", "SELL", "NONE"] },
+          confidence: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: ["symbol", "sentiment", "action", "confidence"],
+        additionalProperties: false,
+      },
+    },
+    overall_confidence: { type: "number", minimum: 0, maximum: 1 },
+    reason: { type: "string" },
+  },
+  required: ["is_actionable", "tickers", "overall_confidence", "reason"],
+  additionalProperties: false,
+} as const;
 
 export async function classifyTweet(tweetText: string): Promise<ClassificationResult> {
-  try {
-    const tickers = await detectTickers(tweetText);
-    
-    if (tickers.length === 0) {
-      return {
-        is_actionable: false,
-        tickers: [],
-        overall_confidence: 0,
-        reason: "No Ondo-supported tickers found",
-      };
-    }
+  const assets = await storage.getAssetRegistry();
+  const supportedTickers = assets
+    .filter(a => a.isActive)
+    .map(a => a.underlyingTicker.toUpperCase());
 
-    return {
-      is_actionable: true,
-      tickers: tickers.map(ticker => ({
-        ticker,
-        symbol: ticker,
-        sentiment: "NEUTRAL" as const,
-        action: "NONE" as const,
-        confidence: 1.0,
-      })),
-      overall_confidence: 1.0,
-      reason: `Found ${tickers.length} Ondo-supported ticker(s): ${tickers.join(", ")}`,
-    };
-  } catch (error) {
-    console.error("[Classifier] Error detecting tickers:", error);
+  if (supportedTickers.length === 0) {
     return {
       is_actionable: false,
       tickers: [],
       overall_confidence: 0,
-      reason: "Classification error",
+      reason: "No supported tickers in asset registry",
     };
+  }
+
+  const openai = getOpenAI();
+  if (!openai) {
+    return regexFallback(tweetText, supportedTickers);
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: AI_MODEL,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: `Supported tickers: ${supportedTickers.join(", ")}\n\nPost:\n"""\n${tweetText}\n"""`,
+        },
+      ],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "classification_result",
+          strict: true,
+          schema: RESPONSE_SCHEMA as any,
+        },
+      },
+      max_completion_tokens: 2048,
+    });
+
+    const raw = response.choices[0]?.message?.content;
+    if (!raw) throw new Error("Empty response from model");
+
+    const parsed = classificationResultSchema.parse(JSON.parse(raw));
+
+    // The model must not invent tickers outside the registry
+    const supported = new Set(supportedTickers);
+    const tickers = parsed.tickers.filter(t => supported.has(t.symbol.toUpperCase()))
+      .map(t => ({ ...t, symbol: t.symbol.toUpperCase() }));
+
+    const isActionable = tickers.some(t => t.action !== "NONE");
+
+    return {
+      ...parsed,
+      tickers,
+      is_actionable: isActionable,
+    };
+  } catch (error) {
+    console.error("[Classifier] AI classification failed, using regex fallback:", error);
+    return regexFallback(tweetText, supportedTickers);
   }
 }
 
-async function detectTickers(text: string): Promise<string[]> {
+// Cashtag matching used when no AI key is configured or the AI call fails.
+// Mentions found this way are never actionable — they carry no directional signal.
+function regexFallback(tweetText: string, supportedTickers: string[]): ClassificationResult {
   const tickerPattern = /\$([A-Z]{1,5})\b/g;
-  const matches = text.matchAll(tickerPattern);
-  const foundTickers = [...matches].map(m => m[1]);
-  
-  const assets = await storage.getAssetRegistry();
-  const ondoTickers = new Set(assets.map(a => a.underlyingTicker.toUpperCase()));
-  
-  const validTickers = foundTickers.filter(t => ondoTickers.has(t.toUpperCase()));
-  
-  return [...new Set(validTickers)];
+  const supported = new Set(supportedTickers);
+  const found = Array.from(new Set(
+    Array.from(tweetText.matchAll(tickerPattern))
+      .map(m => m[1].toUpperCase())
+      .filter(t => supported.has(t))
+  ));
+
+  if (found.length === 0) {
+    return {
+      is_actionable: false,
+      tickers: [],
+      overall_confidence: 0,
+      reason: "No supported tickers found",
+    };
+  }
+
+  return {
+    is_actionable: false,
+    tickers: found.map(ticker => ({
+      symbol: ticker,
+      sentiment: "NEUTRAL" as const,
+      action: "NONE" as const,
+      confidence: 0.3,
+    })),
+    overall_confidence: 0.3,
+    reason: `Ticker mention detected without AI analysis: ${found.join(", ")}`,
+  };
+}
+
+// Tickers from a classification that deserve an alert. With AI enabled, only
+// directional signals above the confidence threshold alert; in regex-fallback
+// mode every supported-ticker mention alerts (better than silence).
+export function getAlertableTickers(result: ClassificationResult): ClassificationResult["tickers"] {
+  const signals = result.tickers.filter(
+    t => t.action !== "NONE" && t.confidence >= MIN_ALERT_CONFIDENCE
+  );
+  if (signals.length > 0) return signals;
+  if (!getOpenAI()) return result.tickers;
+  return [];
 }
 
 export async function shouldCreateAlert(result: ClassificationResult): Promise<boolean> {
-  return result.is_actionable && result.tickers.length > 0;
+  return getAlertableTickers(result).length > 0;
 }

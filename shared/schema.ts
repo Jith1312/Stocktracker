@@ -235,7 +235,7 @@ export const classificationResultSchema = z.object({
   is_actionable: z.boolean(),
   tickers: z.array(z.object({
     symbol: z.string(),
-    sentiment: z.enum(["BULLISH", "BEARISH"]),
+    sentiment: z.enum(["BULLISH", "BEARISH", "NEUTRAL"]),
     action: z.enum(["BUY", "SELL", "NONE"]),
     confidence: z.number().min(0).max(1),
   })),
