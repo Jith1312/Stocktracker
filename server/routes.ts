@@ -8,7 +8,7 @@ import { PrivyClient } from "@privy-io/server-auth";
 import { randomBytes } from "crypto";
 import { tweetProvider, isNewerTweetId } from "./services/tweetProvider";
 import { syncFilterRules } from "./services/tweetFilterRules";
-import { classifyTweet, shouldCreateAlert } from "./services/classifier";
+import { classifyTweet, shouldCreateAlert, getClassifierModel } from "./services/classifier";
 import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
 import * as privyService from "./services/privy";
@@ -30,6 +30,9 @@ const getRpcUrl = () => {
 const connection = new Connection(getRpcUrl());
 
 const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+// Last authenticated push from twitterapi.io (in-memory; resets on restart)
+let lastTwitterWebhookAt: Date | null = null;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -138,6 +141,27 @@ export async function registerRoutes(
       keyQuorumId: process.env.VITE_PRIVY_KEY_QUORUM_ID || null,
       authKeyConfigured: !!process.env.PRIVY_AUTHORIZATION_KEY,
     });
+  });
+
+  // Public, aggregate-only pipeline diagnostics — answers "is ingestion
+  // alive?" without exposing any user data.
+  app.get("/api/health", async (_req: Request, res: Response) => {
+    try {
+      const stats = await storage.getIngestionStats();
+      res.json({
+        status: "ok",
+        now: new Date().toISOString(),
+        uptimeSeconds: Math.round(process.uptime()),
+        classifier: getClassifierModel(),
+        telegramConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
+        twitterApiConfigured: !!process.env.X_API_BEARER_TOKEN,
+        lastTwitterWebhookAt,
+        ...stats,
+      });
+    } catch (error) {
+      console.error("[API] Health error:", error);
+      res.status(500).json({ status: "error", error: String(error) });
+    }
   });
 
   app.get("/api/user/profile", authMiddleware, async (req: Request, res: Response) => {
@@ -1958,6 +1982,8 @@ export async function registerRoutes(
         console.warn("[TwitterWebhook] Rejected request: X-API-Key header does not match X_API_BEARER_TOKEN");
         return res.status(401).json({ error: "Unauthorized" });
       }
+
+      lastTwitterWebhookAt = new Date();
 
       const { event_type, tweets: incomingTweets } = req.body || {};
       if (event_type !== "tweet" || !Array.isArray(incomingTweets)) {
