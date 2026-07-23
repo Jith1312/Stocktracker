@@ -71,6 +71,7 @@ export interface IStorage {
   createTrade(trade: InsertTrade): Promise<Trade>;
   updateTrade(id: number, data: Partial<Trade>): Promise<Trade | undefined>;
   getTradesForPerformanceCheck(cutoff: Date): Promise<Trade[]>;
+  getRecentClassificationsWithTweets(limit?: number): Promise<Array<Classification & { tweetText: string; tweetUrl: string; influencerId: number; tweetCreatedAt: Date | null }>>;
   getIngestionStats(): Promise<{
     trackedInfluencers: number;
     activeAssets: number;
@@ -444,6 +445,30 @@ export class DatabaseStorage implements IStorage {
     await db.delete(mutedTickers).where(
       and(eq(mutedTickers.userId, userId), eq(mutedTickers.ticker, ticker))
     );
+  }
+
+  // Recent classifications joined with their tweets, for the admin
+  // classifier-debug view.
+  async getRecentClassificationsWithTweets(limit = 30): Promise<Array<Classification & { tweetText: string; tweetUrl: string; influencerId: number; tweetCreatedAt: Date | null }>> {
+    const rows = await db
+      .select({
+        id: classifications.id,
+        tweetId: classifications.tweetId,
+        isActionable: classifications.isActionable,
+        overallConfidence: classifications.overallConfidence,
+        resultJson: classifications.resultJson,
+        model: classifications.model,
+        createdAt: classifications.createdAt,
+        tweetText: tweets.text,
+        tweetUrl: tweets.url,
+        influencerId: tweets.influencerId,
+        tweetCreatedAt: tweets.tweetCreatedAt,
+      })
+      .from(classifications)
+      .innerJoin(tweets, eq(classifications.tweetId, tweets.id))
+      .orderBy(desc(classifications.createdAt))
+      .limit(limit);
+    return rows;
   }
 
   // Aggregate, non-sensitive counters for the /api/health endpoint.

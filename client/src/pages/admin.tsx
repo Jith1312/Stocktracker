@@ -23,7 +23,10 @@ import {
   Database,
   Copy,
   Check,
-  Loader2
+  Loader2,
+  Radar,
+  AlertTriangle,
+  BadgeCheck
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 
@@ -60,6 +63,37 @@ const emptyForm: AssetForm = {
   decimals: 6,
   isActive: true,
 };
+
+interface ClassifiedTweet {
+  id: number;
+  influencerHandle: string;
+  tweetText: string;
+  tweetUrl: string;
+  tweetCreatedAt: string | null;
+  classifiedAt: string;
+  model: string | null;
+  isActionable: boolean;
+  reason: string | null;
+  tickers: { symbol?: string; ticker?: string; action?: string; sentiment?: string; confidence?: number }[];
+}
+
+interface DiscoveredStock {
+  mint: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  isVerified: boolean;
+  usdPrice: number | null;
+  holderCount: number | null;
+  suggestedTicker: string;
+}
+
+interface DiscoverResponse {
+  totalOnJupiter: number;
+  inRegistry: number;
+  missing: DiscoveredStock[];
+  unknownInRegistry: { id: number; underlyingTicker: string; solanaMint: string; isActive: boolean }[];
+}
 
 function truncateMint(mint: string): string {
   if (mint.length <= 12) return mint;
@@ -124,6 +158,39 @@ export default function Admin() {
       apiRequest("PATCH", `/api/admin/assets/${id}`, { isActive }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/assets"] });
+    },
+  });
+
+  const discoverQuery = useQuery<DiscoverResponse>({
+    queryKey: ["/api/admin/assets/discover"],
+    enabled: false,
+    staleTime: 0,
+  });
+
+  const { data: classified, isLoading: classifiedLoading } = useQuery<ClassifiedTweet[]>({
+    queryKey: ["/api/admin/classifications"],
+    enabled: profile?.isAdmin,
+    refetchInterval: 60000,
+  });
+
+  // One-click add straight from Jupiter's list, no form round-trip
+  const quickAddMutation = useMutation({
+    mutationFn: (stock: DiscoveredStock) =>
+      apiRequest("POST", "/api/admin/assets", {
+        underlyingTicker: stock.suggestedTicker,
+        ondoSymbol: stock.symbol,
+        solanaMint: stock.mint,
+        tokenProgram: "SPL",
+        decimals: stock.decimals,
+        isActive: true,
+      }),
+    onSuccess: (_data, stock) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/assets"] });
+      discoverQuery.refetch();
+      toast({ title: `$${stock.suggestedTicker} added`, description: `${stock.symbol} is now tradeable` });
+    },
+    onError: (error: any) => {
+      toast({ title: "Failed to add asset", description: error.message || "Please try again", variant: "destructive" });
     },
   });
 
@@ -344,6 +411,111 @@ export default function Admin() {
           </CardContent>
         </Card>
 
+        {/* Jupiter discovery */}
+        <Card className="rise-in rounded-xl">
+          <CardHeader className="flex flex-row items-center justify-between pb-4">
+            <div className="flex items-center gap-3">
+              <Radar className="w-4 h-4 text-muted-foreground" />
+              <div>
+                <CardTitle className="text-base">Discover tokenized stocks</CardTitle>
+                <CardDescription>
+                  {discoverQuery.data
+                    ? <><span className="text-num">{discoverQuery.data.totalOnJupiter}</span> tradeable on Jupiter · <span className="text-num">{discoverQuery.data.missing.length}</span> not in your registry</>
+                    : "Scan Jupiter's stocks list for assets you haven't added"}
+                </CardDescription>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => discoverQuery.refetch()}
+              disabled={discoverQuery.isFetching}
+              data-testid="button-discover-assets"
+            >
+              {discoverQuery.isFetching ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Radar className="w-4 h-4 mr-2" />
+              )}
+              {discoverQuery.isFetching ? "Scanning..." : "Scan Jupiter"}
+            </Button>
+          </CardHeader>
+          {discoverQuery.data && (
+            <CardContent className="pt-0 space-y-4">
+              {discoverQuery.data.unknownInRegistry.length > 0 && (
+                <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm">
+                  <p className="flex items-center gap-2 font-medium text-warning">
+                    <AlertTriangle className="w-4 h-4" />
+                    {discoverQuery.data.unknownInRegistry.length} registry entr{discoverQuery.data.unknownInRegistry.length === 1 ? "y" : "ies"} not found in Jupiter's stocks list
+                  </p>
+                  <p className="text-muted-foreground mt-1">
+                    {discoverQuery.data.unknownInRegistry.map(a => `$${a.underlyingTicker}`).join(", ")} — check the mint address or whether the token was delisted.
+                  </p>
+                </div>
+              )}
+              {discoverQuery.data.missing.length > 0 ? (
+                <div className="overflow-x-auto rounded-lg border border-border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="text-[11px] uppercase tracking-widest">Symbol</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-widest">Name</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-widest text-right">Price</TableHead>
+                        <TableHead className="text-[11px] uppercase tracking-widest text-right">Holders</TableHead>
+                        <TableHead className="text-right"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {discoverQuery.data.missing.map((stock) => (
+                        <TableRow key={stock.mint} data-testid={`discover-row-${stock.symbol}`}>
+                          <TableCell>
+                            <span className="flex items-center gap-1.5 font-mono font-bold">
+                              {stock.symbol}
+                              {stock.isVerified && <BadgeCheck className="w-3.5 h-3.5 text-primary" />}
+                            </span>
+                            <span className="block font-mono text-[10px] text-muted-foreground">
+                              → ${stock.suggestedTicker}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground max-w-[220px] truncate">
+                            {stock.name}
+                          </TableCell>
+                          <TableCell className="text-num text-right">
+                            {stock.usdPrice != null ? `$${stock.usdPrice.toFixed(2)}` : "—"}
+                          </TableCell>
+                          <TableCell className="text-num text-right text-muted-foreground">
+                            {stock.holderCount != null ? stock.holderCount.toLocaleString() : "—"}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => quickAddMutation.mutate(stock)}
+                              disabled={quickAddMutation.isPending}
+                              data-testid={`button-quick-add-${stock.symbol}`}
+                            >
+                              <Plus className="w-3.5 h-3.5 mr-1.5" />
+                              Add
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  Your registry covers every tokenized stock Jupiter lists. Nice.
+                </p>
+              )}
+            </CardContent>
+          )}
+          {discoverQuery.isError && (
+            <CardContent className="pt-0">
+              <p className="text-sm text-bear">Scan failed — check that the server can reach api.jup.ag and try again.</p>
+            </CardContent>
+          )}
+        </Card>
+
         {/* Registry table */}
         <Card className="rise-in rounded-xl">
           <CardHeader className="flex flex-row items-center justify-between pb-4">
@@ -457,6 +629,66 @@ export default function Admin() {
                   Add your first tokenized asset with the form above
                 </p>
               </div>
+            )}
+          </CardContent>
+        </Card>
+        {/* Classifier debug */}
+        <Card className="rise-in rounded-xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">Classifier debug</CardTitle>
+            <CardDescription>
+              Last 30 tweets with the AI's verdict — see exactly why each did or didn't become a signal
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {classifiedLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : classified && classified.length > 0 ? (
+              <div className="divide-y divide-border">
+                {classified.map((row) => (
+                  <div key={row.id} className="py-3 first:pt-0 last:pb-0" data-testid={`classification-row-${row.id}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {row.isActionable ? (
+                        <Badge className="bg-bull/10 text-bull border-bull/30 font-mono text-[10px]">SIGNAL</Badge>
+                      ) : (
+                        <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">SKIPPED</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">@{row.influencerHandle}</span>
+                      {row.tickers.map((t, i) => {
+                        const sym = t.symbol || t.ticker;
+                        if (!sym) return null;
+                        return (
+                          <span key={i} className="font-mono text-xs">
+                            ${sym}
+                            <span className="text-muted-foreground">
+                              {" "}{t.action || "NONE"}{t.confidence != null ? ` ${Math.round(t.confidence * 100)}%` : ""}
+                            </span>
+                          </span>
+                        );
+                      })}
+                      <a
+                        href={row.tweetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto text-muted-foreground hover:text-foreground"
+                        aria-label="Open post on X"
+                      >
+                        <span className="text-xs underline underline-offset-2">post</span>
+                      </a>
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate mt-1">{row.tweetText}</p>
+                    {row.reason && (
+                      <p className="text-xs text-muted-foreground/80 mt-0.5 italic">AI: {row.reason}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-6">No classified tweets yet</p>
             )}
           </CardContent>
         </Card>

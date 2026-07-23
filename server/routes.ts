@@ -2039,7 +2039,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/admin/assets", authMiddleware, async (req: Request, res: Response) => {
+  app.get("/api/admin/assets", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const assets = await storage.getAssetRegistry();
       res.json(assets);
@@ -2049,7 +2049,96 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/assets", authMiddleware, async (req: Request, res: Response) => {
+  // Why did each recent tweet (not) become a signal? Surfaces the AI's
+  // verdict and reasoning per tweet for the admin debug view.
+  app.get("/api/admin/classifications", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const rows = await storage.getRecentClassificationsWithTweets(30);
+      const influencers = await storage.getAllInfluencers();
+      const handleById = new Map(influencers.map(i => [i.id, i.handle]));
+
+      res.json(rows.map(row => {
+        const result = row.resultJson as any;
+        return {
+          id: row.id,
+          influencerHandle: handleById.get(row.influencerId) || "unknown",
+          tweetText: row.tweetText,
+          tweetUrl: row.tweetUrl,
+          tweetCreatedAt: row.tweetCreatedAt,
+          classifiedAt: row.createdAt,
+          model: row.model,
+          isActionable: row.isActionable,
+          reason: result?.reason ?? null,
+          tickers: result?.tickers ?? [],
+        };
+      }));
+    } catch (error) {
+      console.error("[API] Admin classifications error:", error);
+      res.status(500).json({ error: "Failed to get classifications" });
+    }
+  });
+
+  // Diff the asset registry against every tokenized equity tradeable on
+  // Jupiter (Token API v2 "stocks" tag: Ondo, xStocks, ...).
+  app.get("/api/admin/assets/discover", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const apiKey = process.env.JUPITER_API_KEY;
+      const url = apiKey
+        ? "https://api.jup.ag/tokens/v2/tag?query=stocks"
+        : "https://lite-api.jup.ag/tokens/v2/tag?query=stocks";
+      const response = await fetch(url, {
+        headers: apiKey ? { "x-api-key": apiKey } : {},
+      });
+      if (!response.ok) {
+        throw new Error(`Jupiter token API error ${response.status}: ${await response.text()}`);
+      }
+      const stocks: any[] = await response.json();
+
+      const registry = await storage.getAssetRegistry();
+      const registryMints = new Set(registry.map(a => a.solanaMint));
+      const stockMints = new Set(stocks.map(s => s.id));
+
+      // Best-effort underlying ticker from issuer naming conventions
+      // (Ondo: "NVDAon", xStocks: "NVDAx"); admin can edit before saving.
+      const suggestTicker = (symbol: string): string => {
+        if (/on$/i.test(symbol) && symbol.length > 3) return symbol.slice(0, -2).toUpperCase();
+        if (/x$/.test(symbol) && symbol.length > 2) return symbol.slice(0, -1).toUpperCase();
+        return symbol.toUpperCase();
+      };
+
+      const missing = stocks
+        .filter(s => !registryMints.has(s.id))
+        .map(s => ({
+          mint: s.id,
+          symbol: s.symbol,
+          name: s.name,
+          decimals: s.decimals,
+          isVerified: !!s.isVerified,
+          usdPrice: s.usdPrice ?? null,
+          holderCount: s.holderCount ?? null,
+          suggestedTicker: suggestTicker(s.symbol || ""),
+        }))
+        .sort((a, b) => (b.holderCount ?? 0) - (a.holderCount ?? 0));
+
+      // Registry entries Jupiter no longer tags as stocks — possibly
+      // delisted or a mistyped mint
+      const unknownInRegistry = registry
+        .filter(a => !stockMints.has(a.solanaMint))
+        .map(a => ({ id: a.id, underlyingTicker: a.underlyingTicker, solanaMint: a.solanaMint, isActive: a.isActive }));
+
+      res.json({
+        totalOnJupiter: stocks.length,
+        inRegistry: registry.length,
+        missing,
+        unknownInRegistry,
+      });
+    } catch (error) {
+      console.error("[API] Asset discovery error:", error);
+      res.status(500).json({ error: "Failed to fetch Jupiter stock list" });
+    }
+  });
+
+  app.post("/api/admin/assets", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const asset = await storage.createAsset(req.body);
       res.status(201).json(asset);
@@ -2059,7 +2148,7 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
+  app.put("/api/admin/assets/:id", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const id = parseInt(String(req.params.id));
       const asset = await storage.updateAsset(id, req.body);
@@ -2070,7 +2159,7 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
+  app.patch("/api/admin/assets/:id", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const id = parseInt(String(req.params.id));
       const asset = await storage.updateAsset(id, req.body);
@@ -2081,7 +2170,7 @@ export async function registerRoutes(
     }
   });
 
-  app.delete("/api/admin/assets/:id", authMiddleware, async (req: Request, res: Response) => {
+  app.delete("/api/admin/assets/:id", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const id = parseInt(String(req.params.id));
       await storage.deleteAsset(id);
