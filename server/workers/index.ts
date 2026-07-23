@@ -230,59 +230,70 @@ async function pollTweetsWorker() {
   }
 }
 
+// Classify one tweet and fan out alerts for any actionable signals. Called
+// from the cron worker and directly from the twitter webhook so pushed tweets
+// alert immediately (cron may not fire on serverless deployments that sleep
+// between requests).
+export async function classifyAndAlertTweet(tweet: { id: number; text: string; influencerId: number; url: string; tweetCreatedAt: Date | null; ingestedAt: Date }): Promise<void> {
+  const existing = await storage.getClassificationByTweetId(tweet.id);
+  if (existing) return;
+
+  const result = await classifyTweet(tweet.text);
+
+  const classification = await storage.createClassification({
+    tweetId: tweet.id,
+    isActionable: result.is_actionable,
+    overallConfidence: result.overall_confidence.toString(),
+    resultJson: result,
+    model: getClassifierModel(),
+  });
+
+  console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable} (${result.reason})`);
+
+  for (const ticker of getAlertableTickers(result)) {
+    const tickerSymbol = ticker.symbol;
+    const asset = await storage.getAssetByTicker(tickerSymbol);
+    if (!asset?.isActive) continue;
+
+    // Entry-price snapshot enables trader track records later
+    let priceUsdAtEvent: string | undefined;
+    try {
+      const price = await prices.getTokenPriceUsd(asset.solanaMint, asset.decimals);
+      if (price != null) priceUsdAtEvent = price.toFixed(8);
+    } catch (e) {
+      console.log(`[Worker] Price snapshot failed for ${tickerSymbol}:`, e);
+    }
+
+    const alertEvent = await storage.createAlertEvent({
+      tweetId: tweet.id,
+      classificationId: classification.id,
+      ticker: tickerSymbol,
+      sentiment: ticker.sentiment,
+      action: ticker.action,
+      confidence: ticker.confidence.toString(),
+      priceUsdAtEvent,
+    });
+
+    console.log(`[Worker] Created alert event for $${tickerSymbol}: ${ticker.action} (${ticker.sentiment}, ${ticker.confidence})`);
+
+    await sendAlertsForEvent(alertEvent.id, tweet, {
+      symbol: tickerSymbol,
+      action: ticker.action,
+      confidence: ticker.confidence,
+      reason: result.reason,
+    });
+  }
+}
+
 async function classifyTweetsWorker() {
   console.log("[Worker] Starting classification...");
-  
+
   try {
     const unclassified = await storage.getUnclassifiedTweets(10);
-    
+
     for (const tweet of unclassified) {
       try {
-        const result = await classifyTweet(tweet.text);
-
-        const classification = await storage.createClassification({
-          tweetId: tweet.id,
-          isActionable: result.is_actionable,
-          overallConfidence: result.overall_confidence.toString(),
-          resultJson: result,
-          model: getClassifierModel(),
-        });
-
-        console.log(`[Worker] Classified tweet ${tweet.id}: actionable=${result.is_actionable} (${result.reason})`);
-
-        for (const ticker of getAlertableTickers(result)) {
-          const tickerSymbol = ticker.symbol;
-          const asset = await storage.getAssetByTicker(tickerSymbol);
-          if (!asset?.isActive) continue;
-
-          // Entry-price snapshot enables trader track records later
-          let priceUsdAtEvent: string | undefined;
-          try {
-            const price = await prices.getTokenPriceUsd(asset.solanaMint, asset.decimals);
-            if (price != null) priceUsdAtEvent = price.toFixed(8);
-          } catch (e) {
-            console.log(`[Worker] Price snapshot failed for ${tickerSymbol}:`, e);
-          }
-
-          const alertEvent = await storage.createAlertEvent({
-            tweetId: tweet.id,
-            classificationId: classification.id,
-            ticker: tickerSymbol,
-            sentiment: ticker.sentiment,
-            action: ticker.action,
-            confidence: ticker.confidence.toString(),
-            priceUsdAtEvent,
-          });
-
-          console.log(`[Worker] Created alert event for $${tickerSymbol}: ${ticker.action} (${ticker.sentiment}, ${ticker.confidence})`);
-
-          await sendAlertsForEvent(alertEvent.id, tweet, {
-            symbol: tickerSymbol,
-            action: ticker.action,
-            confidence: ticker.confidence,
-            reason: result.reason,
-          });
-        }
+        await classifyAndAlertTweet(tweet);
       } catch (error) {
         console.error(`[Worker] Error classifying tweet ${tweet.id}:`, error);
       }

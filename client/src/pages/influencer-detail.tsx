@@ -106,10 +106,13 @@ export default function InfluencerDetail() {
   });
 
   const toggleMutation = useMutation({
-    mutationFn: ({ enabled }: { enabled: boolean }) =>
-      apiRequest("PATCH", `/api/subscriptions/${subscription?.id}`, { enabled }),
+    mutationFn: ({ enabled }: { enabled: boolean }) => {
+      if (!subscription?.id) throw new Error("No subscription loaded");
+      return apiRequest("PATCH", `/api/subscriptions/${subscription.id}`, { enabled });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/subscriptions/influencer", id] });
     },
   });
 
@@ -230,7 +233,8 @@ export default function InfluencerDetail() {
               <div className="flex items-center gap-4 shrink-0 pl-14 sm:pl-0">
                 <div className="flex flex-col items-center gap-1">
                   <Switch
-                    checked={subscription?.enabled}
+                    checked={subscription?.enabled ?? false}
+                    disabled={!subscription || toggleMutation.isPending}
                     onCheckedChange={(enabled) => toggleMutation.mutate({ enabled })}
                     data-testid="switch-alerts"
                   />
