@@ -2049,6 +2049,46 @@ export async function registerRoutes(
     }
   });
 
+  // Wipe classifications for recent tweets and rerun the classifier —
+  // used after prompt/threshold changes so past tweets get re-evaluated
+  // with the current rules. Reclassifies a batch inline; the cron worker
+  // finishes any remainder.
+  app.post("/api/admin/reclassify", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const hours = Math.min(168, Math.max(1, parseInt(req.body?.hours) || 24));
+      const immediate = Math.min(30, Math.max(0, parseInt(req.body?.immediate) || 15));
+
+      const recentTweets = await storage.getTweetsInWindow(hours, 200);
+      for (const tweet of recentTweets) {
+        await storage.deleteClassificationsByTweetId(tweet.id);
+      }
+
+      let reclassifiedNow = 0;
+      let actionableNow = 0;
+      for (const tweet of recentTweets.slice(0, immediate)) {
+        try {
+          await classifyAndAlertTweet(tweet);
+          reclassifiedNow++;
+          const classification = await storage.getClassificationByTweetId(tweet.id);
+          if (classification?.isActionable) actionableNow++;
+        } catch (e) {
+          console.error(`[API] Reclassify error for tweet ${tweet.id}:`, e);
+        }
+      }
+
+      res.json({
+        cleared: recentTweets.length,
+        reclassifiedNow,
+        actionableNow,
+        remaining: recentTweets.length - reclassifiedNow,
+        note: "Remaining tweets will be reclassified by the background worker (10/minute)",
+      });
+    } catch (error) {
+      console.error("[API] Reclassify error:", error);
+      res.status(500).json({ error: "Failed to reclassify" });
+    }
+  });
+
   // Why did each recent tweet (not) become a signal? Surfaces the AI's
   // verdict and reasoning per tweet for the admin debug view.
   app.get("/api/admin/classifications", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {

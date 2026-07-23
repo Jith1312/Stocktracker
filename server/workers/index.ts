@@ -317,7 +317,7 @@ async function sendAlertsForEvent(
 
     for (const sub of subscribers) {
       const user = await storage.getUser(sub.userId);
-      if (!user?.telegramChatId) continue;
+      if (!user) continue;
 
       const mutedTickers = await storage.getMutedTickers(user.id);
       if (mutedTickers.some(m => m.ticker === ticker.symbol)) continue;
@@ -328,11 +328,18 @@ async function sendAlertsForEvent(
         continue;
       }
 
+      // Always record the alert so it shows in the in-app Signals feed;
+      // Telegram delivery below is best-effort on top.
       const userAlert = await storage.createUserAlert({
         userId: user.id,
         alertEventId,
         status: "SENT",
       });
+
+      if (!user.telegramChatId) {
+        console.log(`[Worker] User ${user.id} has no Telegram linked; in-app alert only`);
+        continue;
+      }
 
       const message = telegram.formatAlertMessage(
         influencer.handle,
