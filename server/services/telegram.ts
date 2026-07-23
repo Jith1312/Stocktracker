@@ -13,6 +13,15 @@ interface SendMessageOptions {
   replyMarkup?: {
     inline_keyboard: InlineKeyboardButton[][];
   };
+  // When set, Telegram renders a large preview card of this URL (an X post
+  // preview shows the tweet with its media)
+  linkPreviewUrl?: string;
+}
+
+// Tweets routinely contain <, >, & — unescaped they make Telegram reject the
+// whole HTML-mode message and the alert is silently lost.
+export function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 interface TelegramMessage {
@@ -37,6 +46,9 @@ export async function sendMessage(options: SendMessageOptions): Promise<Telegram
         text: options.text,
         parse_mode: options.parseMode || "HTML",
         reply_markup: options.replyMarkup,
+        link_preview_options: options.linkPreviewUrl
+          ? { url: options.linkPreviewUrl, prefer_large_media: true, show_above_text: false }
+          : undefined,
       }),
     });
 
@@ -131,16 +143,18 @@ export function formatAlertMessage(
 
   const confidencePct = Math.round(confidence * 100);
   const confidenceLine = action === "BUY" || action === "SELL"
-    ? `\n🎯 Confidence: ${confidencePct}%${reason ? `\n💡 ${reason}` : ""}\n`
+    ? `\n🎯 Confidence: ${confidencePct}%${reason ? `\n💡 ${escapeHtml(reason)}` : ""}\n`
     : "";
+
+  const excerpt = escapeHtml(tweetExcerpt.slice(0, 800)) + (tweetExcerpt.length > 800 ? "…" : "");
 
   return `${headline}
 
-👤 From: @${influencerHandle}${dateStr ? ` • ${dateStr}` : ""}
+👤 <b>@${escapeHtml(influencerHandle)}</b>${dateStr ? ` • ${dateStr}` : ""}
 ${confidenceLine}
-"${tweetExcerpt.slice(0, 250)}${tweetExcerpt.length > 250 ? "..." : ""}"
+<blockquote>${excerpt}</blockquote>
 
-<a href="${tweetUrl}">View Tweet</a>`;
+<a href="${tweetUrl}">View post on X</a>`;
 }
 
 export function createTradeButtons(

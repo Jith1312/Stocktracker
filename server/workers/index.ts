@@ -103,6 +103,7 @@ export async function sendBackfillAlerts(userId: number, influencerId: number): 
         chatId: user.telegramChatId,
         text: message,
         replyMarkup: { inline_keyboard: buttons },
+        linkPreviewUrl: tweet.url,
       });
 
       if (sentMessage) {
@@ -371,6 +372,7 @@ async function sendAlertsForEvent(
         chatId: user.telegramChatId,
         text: message,
         replyMarkup: { inline_keyboard: buttons },
+        linkPreviewUrl: tweet.url,
       });
 
       if (sentMessage) {
