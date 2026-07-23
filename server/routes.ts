@@ -2049,6 +2049,35 @@ export async function registerRoutes(
     }
   });
 
+  // Why did each recent tweet (not) become a signal? Surfaces the AI's
+  // verdict and reasoning per tweet for the admin debug view.
+  app.get("/api/admin/classifications", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
+    try {
+      const rows = await storage.getRecentClassificationsWithTweets(30);
+      const influencers = await storage.getAllInfluencers();
+      const handleById = new Map(influencers.map(i => [i.id, i.handle]));
+
+      res.json(rows.map(row => {
+        const result = row.resultJson as any;
+        return {
+          id: row.id,
+          influencerHandle: handleById.get(row.influencerId) || "unknown",
+          tweetText: row.tweetText,
+          tweetUrl: row.tweetUrl,
+          tweetCreatedAt: row.tweetCreatedAt,
+          classifiedAt: row.createdAt,
+          model: row.model,
+          isActionable: row.isActionable,
+          reason: result?.reason ?? null,
+          tickers: result?.tickers ?? [],
+        };
+      }));
+    } catch (error) {
+      console.error("[API] Admin classifications error:", error);
+      res.status(500).json({ error: "Failed to get classifications" });
+    }
+  });
+
   // Diff the asset registry against every tokenized equity tradeable on
   // Jupiter (Token API v2 "stocks" tag: Ondo, xStocks, ...).
   app.get("/api/admin/assets/discover", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {

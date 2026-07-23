@@ -64,6 +64,19 @@ const emptyForm: AssetForm = {
   isActive: true,
 };
 
+interface ClassifiedTweet {
+  id: number;
+  influencerHandle: string;
+  tweetText: string;
+  tweetUrl: string;
+  tweetCreatedAt: string | null;
+  classifiedAt: string;
+  model: string | null;
+  isActionable: boolean;
+  reason: string | null;
+  tickers: { symbol?: string; ticker?: string; action?: string; sentiment?: string; confidence?: number }[];
+}
+
 interface DiscoveredStock {
   mint: string;
   symbol: string;
@@ -152,6 +165,12 @@ export default function Admin() {
     queryKey: ["/api/admin/assets/discover"],
     enabled: false,
     staleTime: 0,
+  });
+
+  const { data: classified, isLoading: classifiedLoading } = useQuery<ClassifiedTweet[]>({
+    queryKey: ["/api/admin/classifications"],
+    enabled: profile?.isAdmin,
+    refetchInterval: 60000,
   });
 
   // One-click add straight from Jupiter's list, no form round-trip
@@ -610,6 +629,66 @@ export default function Admin() {
                   Add your first tokenized asset with the form above
                 </p>
               </div>
+            )}
+          </CardContent>
+        </Card>
+        {/* Classifier debug */}
+        <Card className="rise-in rounded-xl">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base">Classifier debug</CardTitle>
+            <CardDescription>
+              Last 30 tweets with the AI's verdict — see exactly why each did or didn't become a signal
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {classifiedLoading ? (
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : classified && classified.length > 0 ? (
+              <div className="divide-y divide-border">
+                {classified.map((row) => (
+                  <div key={row.id} className="py-3 first:pt-0 last:pb-0" data-testid={`classification-row-${row.id}`}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {row.isActionable ? (
+                        <Badge className="bg-bull/10 text-bull border-bull/30 font-mono text-[10px]">SIGNAL</Badge>
+                      ) : (
+                        <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">SKIPPED</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">@{row.influencerHandle}</span>
+                      {row.tickers.map((t, i) => {
+                        const sym = t.symbol || t.ticker;
+                        if (!sym) return null;
+                        return (
+                          <span key={i} className="font-mono text-xs">
+                            ${sym}
+                            <span className="text-muted-foreground">
+                              {" "}{t.action || "NONE"}{t.confidence != null ? ` ${Math.round(t.confidence * 100)}%` : ""}
+                            </span>
+                          </span>
+                        );
+                      })}
+                      <a
+                        href={row.tweetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-auto text-muted-foreground hover:text-foreground"
+                        aria-label="Open post on X"
+                      >
+                        <span className="text-xs underline underline-offset-2">post</span>
+                      </a>
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate mt-1">{row.tweetText}</p>
+                    {row.reason && (
+                      <p className="text-xs text-muted-foreground/80 mt-0.5 italic">AI: {row.reason}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-6">No classified tweets yet</p>
             )}
           </CardContent>
         </Card>
