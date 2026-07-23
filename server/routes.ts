@@ -2131,16 +2131,39 @@ export async function registerRoutes(
   app.get("/api/admin/assets/discover", authMiddleware, adminMiddleware, async (req: Request, res: Response) => {
     try {
       const apiKey = process.env.JUPITER_API_KEY;
-      const url = apiKey
-        ? "https://api.jup.ag/tokens/v2/tag?query=stocks"
-        : "https://lite-api.jup.ag/tokens/v2/tag?query=stocks";
-      const response = await fetch(url, {
-        headers: apiKey ? { "x-api-key": apiKey } : {},
-      });
-      if (!response.ok) {
-        throw new Error(`Jupiter token API error ${response.status}: ${await response.text()}`);
+      // Not every API key tier covers the Token API, so fall back to the
+      // free-tier host; report every attempt if all fail.
+      const candidates: { url: string; headers: Record<string, string> }[] = [
+        ...(apiKey ? [{ url: "https://api.jup.ag/tokens/v2/tag?query=stocks", headers: { "x-api-key": apiKey } }] : []),
+        { url: "https://lite-api.jup.ag/tokens/v2/tag?query=stocks", headers: {} },
+      ];
+
+      let stocks: any[] | null = null;
+      const attempts: string[] = [];
+      for (const candidate of candidates) {
+        const host = new URL(candidate.url).host;
+        try {
+          const response = await fetch(candidate.url, { headers: candidate.headers });
+          if (!response.ok) {
+            attempts.push(`${host}: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
+            continue;
+          }
+          const data = await response.json();
+          if (!Array.isArray(data)) {
+            attempts.push(`${host}: unexpected response shape (${JSON.stringify(data).slice(0, 120)})`);
+            continue;
+          }
+          stocks = data;
+          break;
+        } catch (e: any) {
+          attempts.push(`${host}: ${e?.message || String(e)}`);
+        }
       }
-      const stocks: any[] = await response.json();
+
+      if (!stocks) {
+        console.error("[API] Asset discovery failed:", attempts.join(" | "));
+        return res.status(502).json({ error: `Jupiter token API failed — ${attempts.join(" | ")}` });
+      }
 
       const registry = await storage.getAssetRegistry();
       const registryMints = new Set(registry.map(a => a.solanaMint));
