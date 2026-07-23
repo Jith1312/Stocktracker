@@ -35,6 +35,13 @@ const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGk
 let lastTwitterWebhookAt: Date | null = null;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
+// Case/whitespace-insensitive so an ADMIN_EMAIL secret with a stray space or
+// different casing still matches
+function isAdminEmail(email: string | null | undefined): boolean {
+  if (!ADMIN_EMAIL || !email) return false;
+  return email.trim().toLowerCase() === ADMIN_EMAIL.trim().toLowerCase();
+}
+
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
     const authHeader = req.headers.authorization;
@@ -124,7 +131,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
 
 async function adminMiddleware(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).user;
-  if (!user?.email || user.email !== ADMIN_EMAIL) {
+  if (!isAdminEmail(user?.email)) {
     return res.status(403).json({ error: "Admin access required" });
   }
   next();
@@ -155,6 +162,7 @@ export async function registerRoutes(
         classifier: getClassifierModel(),
         telegramConfigured: !!process.env.TELEGRAM_BOT_TOKEN,
         twitterApiConfigured: !!process.env.X_API_BEARER_TOKEN,
+        adminEmailConfigured: !!process.env.ADMIN_EMAIL,
         lastTwitterWebhookAt,
         ...stats,
       });
@@ -188,7 +196,7 @@ export async function registerRoutes(
         signerEnabled: user.signerEnabled,
         privyWalletId: user.privyWalletId,
         onboardingCompleted: user.onboardingCompleted,
-        isAdmin: userEmail === ADMIN_EMAIL,
+        isAdmin: isAdminEmail(userEmail),
       });
     } catch (error) {
       console.error("[API] Profile error:", error);
