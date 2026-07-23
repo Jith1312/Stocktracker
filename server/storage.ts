@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, and, isNull, lt, gte, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, lt, gte, sql, count } from "drizzle-orm";
 import {
   users, influencers, subscriptions, tweets, classifications,
   alertEvents, userAlerts, preparedOrders, trades, assetRegistry,
@@ -71,6 +71,17 @@ export interface IStorage {
   createTrade(trade: InsertTrade): Promise<Trade>;
   updateTrade(id: number, data: Partial<Trade>): Promise<Trade | undefined>;
   getTradesForPerformanceCheck(cutoff: Date): Promise<Trade[]>;
+  getIngestionStats(): Promise<{
+    trackedInfluencers: number;
+    activeAssets: number;
+    tweetsTotal: number;
+    tweetsLast24h: number;
+    lastTweetIngestedAt: Date | null;
+    classificationsLast24h: number;
+    alertEventsLast24h: number;
+    lastAlertEventAt: Date | null;
+    lastPolledAt: Date | null;
+  }>;
 
   getAssetRegistry(): Promise<AssetRegistryEntry[]>;
   getAssetByTicker(ticker: string): Promise<AssetRegistryEntry | undefined>;
@@ -433,6 +444,47 @@ export class DatabaseStorage implements IStorage {
     await db.delete(mutedTickers).where(
       and(eq(mutedTickers.userId, userId), eq(mutedTickers.ticker, ticker))
     );
+  }
+
+  // Aggregate, non-sensitive counters for the /api/health endpoint.
+  async getIngestionStats(): Promise<{
+    trackedInfluencers: number;
+    activeAssets: number;
+    tweetsTotal: number;
+    tweetsLast24h: number;
+    lastTweetIngestedAt: Date | null;
+    classificationsLast24h: number;
+    alertEventsLast24h: number;
+    lastAlertEventAt: Date | null;
+    lastPolledAt: Date | null;
+  }> {
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const tracked = await this.getInfluencersWithActiveSubscribers();
+    const [assets] = await db.select({ n: count() }).from(assetRegistry).where(eq(assetRegistry.isActive, true));
+    const [tweetsTotal] = await db.select({ n: count() }).from(tweets);
+    const [tweets24] = await db.select({ n: count() }).from(tweets).where(gte(tweets.ingestedAt, since));
+    const [class24] = await db.select({ n: count() }).from(classifications).where(gte(classifications.createdAt, since));
+    const [alerts24] = await db.select({ n: count() }).from(alertEvents).where(gte(alertEvents.createdAt, since));
+    const [lastTweet] = await db.select().from(tweets).orderBy(desc(tweets.ingestedAt)).limit(1);
+    const [lastAlert] = await db.select().from(alertEvents).orderBy(desc(alertEvents.createdAt)).limit(1);
+
+    const lastPolledAt = tracked.reduce<Date | null>((latest, i) => {
+      if (!i.lastPolledAt) return latest;
+      return !latest || i.lastPolledAt > latest ? i.lastPolledAt : latest;
+    }, null);
+
+    return {
+      trackedInfluencers: tracked.length,
+      activeAssets: assets.n,
+      tweetsTotal: tweetsTotal.n,
+      tweetsLast24h: tweets24.n,
+      lastTweetIngestedAt: lastTweet?.ingestedAt ?? null,
+      classificationsLast24h: class24.n,
+      alertEventsLast24h: alerts24.n,
+      lastAlertEventAt: lastAlert?.createdAt ?? null,
+      lastPolledAt,
+    };
   }
 
   async getTransfersByUser(userId: number, limit: number = 50): Promise<Transfer[]> {
