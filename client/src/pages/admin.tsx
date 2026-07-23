@@ -91,6 +91,7 @@ interface DiscoveredStock {
 interface DiscoverResponse {
   totalOnJupiter: number;
   inRegistry: number;
+  tagUsed?: string | null;
   missing: DiscoveredStock[];
   unknownInRegistry: { id: number; underlyingTicker: string; solanaMint: string; isActive: boolean }[];
 }
