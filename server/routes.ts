@@ -13,7 +13,7 @@ import * as jupiter from "./services/jupiter";
 import * as telegram from "./services/telegram";
 import * as privyService from "./services/privy";
 import * as performanceService from "./services/performance";
-import { pollInfluencerTweets, sendBackfillAlerts } from "./workers";
+import { pollInfluencerTweets, sendBackfillAlerts, classifyAndAlertTweet } from "./workers";
 
 const privy = new PrivyClient(
   process.env.PRIVY_APP_ID!,
@@ -401,7 +401,14 @@ export async function registerRoutes(
       } catch (e) {
         console.error(`[API] Performance calc error for influencer ${id}:`, e);
       }
-      res.json({ ...influencer, performance });
+      const tweets = await storage.getTweetsByInfluencer(id, 500);
+      const alertEvents = await storage.getAlertEventsByInfluencer(id, 500);
+      res.json({
+        ...influencer,
+        performance,
+        tweetCount: tweets.length,
+        alertCount: alertEvents.length,
+      });
     } catch (error) {
       console.error("[API] Get influencer error:", error);
       res.status(500).json({ error: "Failed to get influencer" });
@@ -442,6 +449,23 @@ export async function registerRoutes(
     } catch (error) {
       console.error("[API] Get tweets error:", error);
       res.status(500).json({ error: "Failed to get tweets" });
+    }
+  });
+
+  // The user's subscription for a given influencer (used by the trader
+  // detail page's signals toggle).
+  app.get("/api/subscriptions/influencer/:influencerId", authMiddleware, async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const influencerId = parseInt(String(req.params.influencerId));
+      const subscription = await storage.getSubscriptionByUserAndInfluencer(user.id, influencerId);
+      if (!subscription) {
+        return res.status(404).json({ error: "Not subscribed to this influencer" });
+      }
+      res.json(subscription);
+    } catch (error) {
+      console.error("[API] Get subscription error:", error);
+      res.status(500).json({ error: "Failed to get subscription" });
     }
   });
 
@@ -1931,6 +1955,7 @@ export async function registerRoutes(
       const configuredKey = process.env.X_API_BEARER_TOKEN;
       const receivedKey = req.headers["x-api-key"];
       if (!configuredKey || receivedKey !== configuredKey) {
+        console.warn("[TwitterWebhook] Rejected request: X-API-Key header does not match X_API_BEARER_TOKEN");
         return res.status(401).json({ error: "Unauthorized" });
       }
 
@@ -1951,7 +1976,7 @@ export async function registerRoutes(
         const existing = await storage.getTweetByTweetId(tweet.id);
         if (existing) continue;
 
-        await storage.createTweet({
+        const savedTweet = await storage.createTweet({
           influencerId: influencer.id,
           tweetId: tweet.id,
           text: tweet.text,
@@ -1960,6 +1985,14 @@ export async function registerRoutes(
           tweetCreatedAt: tweet.created_at ? new Date(tweet.created_at) : undefined,
         });
         savedCount++;
+
+        // Classify inline so alerts go out even if the cron worker is asleep
+        // (serverless deployments only run while handling requests)
+        try {
+          await classifyAndAlertTweet(savedTweet);
+        } catch (e) {
+          console.error(`[TwitterWebhook] Inline classification failed for tweet ${savedTweet.id} (cron will retry):`, e);
+        }
 
         if (isNewerTweetId(tweet.id, influencer.lastTweetId)) {
           await storage.updateInfluencer(influencer.id, {
