@@ -72,6 +72,8 @@ export interface IStorage {
   updateTrade(id: number, data: Partial<Trade>): Promise<Trade | undefined>;
   getTradesForPerformanceCheck(cutoff: Date): Promise<Trade[]>;
   getRecentClassificationsWithTweets(limit?: number): Promise<Array<Classification & { tweetText: string; tweetUrl: string; influencerId: number; tweetCreatedAt: Date | null }>>;
+  getTweetsInWindow(hours: number, limit?: number): Promise<Tweet[]>;
+  deleteClassificationsByTweetId(tweetId: number): Promise<void>;
   getIngestionStats(): Promise<{
     trackedInfluencers: number;
     activeAssets: number;
@@ -445,6 +447,20 @@ export class DatabaseStorage implements IStorage {
     await db.delete(mutedTickers).where(
       and(eq(mutedTickers.userId, userId), eq(mutedTickers.ticker, ticker))
     );
+  }
+
+  async getTweetsInWindow(hours: number, limit = 200): Promise<Tweet[]> {
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    return db.select().from(tweets)
+      .where(gte(tweets.ingestedAt, since))
+      .orderBy(desc(tweets.ingestedAt))
+      .limit(limit);
+  }
+
+  // Deleting a tweet's classifications cascades its alert events and user
+  // alerts, so the tweet becomes fresh for reclassification.
+  async deleteClassificationsByTweetId(tweetId: number): Promise<void> {
+    await db.delete(classifications).where(eq(classifications.tweetId, tweetId));
   }
 
   // Recent classifications joined with their tweets, for the admin

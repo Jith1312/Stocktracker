@@ -173,6 +173,20 @@ export default function Admin() {
     refetchInterval: 60000,
   });
 
+  const reclassifyMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/reclassify", { hours: 24 }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/classifications"] });
+      toast({
+        title: "Reclassification started",
+        description: `${data.cleared} tweets cleared; ${data.reclassifiedNow} redone now (${data.actionableNow} actionable), ${data.remaining} continuing in background`,
+      });
+    },
+    onError: (error: any) => {
+      toast({ title: "Reclassify failed", description: error.message || "Please try again", variant: "destructive" });
+    },
+  });
+
   // One-click add straight from Jupiter's list, no form round-trip
   const quickAddMutation = useMutation({
     mutationFn: (stock: DiscoveredStock) =>
@@ -634,11 +648,26 @@ export default function Admin() {
         </Card>
         {/* Classifier debug */}
         <Card className="rise-in rounded-xl">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">Classifier debug</CardTitle>
-            <CardDescription>
-              Last 30 tweets with the AI's verdict — see exactly why each did or didn't become a signal
-            </CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between pb-4">
+            <div>
+              <CardTitle className="text-base">Classifier debug</CardTitle>
+              <CardDescription>
+                Last 30 tweets with the AI's verdict — see exactly why each did or didn't become a signal
+              </CardDescription>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => reclassifyMutation.mutate()}
+              disabled={reclassifyMutation.isPending}
+              data-testid="button-reclassify"
+            >
+              {reclassifyMutation.isPending ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <Radar className="w-4 h-4 mr-2" />
+              )}
+              {reclassifyMutation.isPending ? "Rerunning..." : "Rerun last 24h"}
+            </Button>
           </CardHeader>
           <CardContent className="pt-0">
             {classifiedLoading ? (
