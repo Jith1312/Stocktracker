@@ -33,6 +33,10 @@ const USDC_MINT = process.env.USDC_MINT || "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGk
 
 // Last authenticated push from twitterapi.io (in-memory; resets on restart)
 let lastTwitterWebhookAt: Date | null = null;
+
+// The tag Jupiter's token API actually accepts for tokenized equities,
+// learned at runtime (their docs and production disagree on the name)
+let cachedStocksTag: string | null = null;
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
 // Case/whitespace-insensitive so an ADMIN_EMAIL secret with a stray space or
@@ -2133,30 +2137,65 @@ export async function registerRoutes(
       const apiKey = process.env.JUPITER_API_KEY;
       // Not every API key tier covers the Token API, so fall back to the
       // free-tier host; report every attempt if all fail.
-      const candidates: { url: string; headers: Record<string, string> }[] = [
-        ...(apiKey ? [{ url: "https://api.jup.ag/tokens/v2/tag?query=stocks", headers: { "x-api-key": apiKey } }] : []),
-        { url: "https://lite-api.jup.ag/tokens/v2/tag?query=stocks", headers: {} },
+      const hosts: { base: string; headers: Record<string, string> }[] = [
+        ...(apiKey ? [{ base: "https://api.jup.ag", headers: { "x-api-key": apiKey } }] : []),
+        { base: "https://lite-api.jup.ag", headers: {} },
       ];
-
-      let stocks: any[] | null = null;
       const attempts: string[] = [];
-      for (const candidate of candidates) {
-        const host = new URL(candidate.url).host;
-        try {
-          const response = await fetch(candidate.url, { headers: candidate.headers });
-          if (!response.ok) {
-            attempts.push(`${host}: HTTP ${response.status} ${(await response.text()).slice(0, 200)}`);
-            continue;
+
+      const fetchArray = async (path: string): Promise<any[] | null> => {
+        for (const host of hosts) {
+          const label = `${new URL(host.base).host}${path}`;
+          try {
+            const response = await fetch(`${host.base}${path}`, { headers: host.headers });
+            const body = await response.text();
+            if (!response.ok) {
+              attempts.push(`${label}: HTTP ${response.status} ${body.slice(0, 120)}`);
+              continue;
+            }
+            const data = JSON.parse(body);
+            if (Array.isArray(data)) return data;
+            attempts.push(`${label}: unexpected shape ${body.slice(0, 120)}`);
+          } catch (e: any) {
+            attempts.push(`${label}: ${e?.message || String(e)}`);
           }
-          const data = await response.json();
-          if (!Array.isArray(data)) {
-            attempts.push(`${host}: unexpected response shape (${JSON.stringify(data).slice(0, 120)})`);
-            continue;
+        }
+        return null;
+      };
+
+      // 1) Try known/likely tag names (env override and last-known-good first)
+      let stocks: any[] | null = null;
+      let tagUsed: string | null = null;
+      const candidateTags = Array.from(new Set(
+        [process.env.JUPITER_STOCKS_TAG, cachedStocksTag, "stocks", "xstocks", "stock", "equities"]
+          .filter((t): t is string => !!t)
+      ));
+      for (const tag of candidateTags) {
+        const data = await fetchArray(`/tokens/v2/tag?query=${encodeURIComponent(tag)}`);
+        if (data && data.length > 0) { stocks = data; tagUsed = tag; break; }
+      }
+
+      // 2) Self-heal: search a known tokenized stock, read the tags Jupiter
+      // actually put on it, and retry the tag endpoint with those
+      if (!stocks) {
+        const probe = await fetchArray(`/tokens/v2/search?query=${encodeURIComponent("xstock")}`);
+        const genericTags = new Set(["verified", "lst", "community", "strict"]);
+        const learned = new Set<string>();
+        for (const token of probe || []) {
+          for (const tag of token.tags || []) {
+            if (typeof tag === "string" && !candidateTags.includes(tag) && !genericTags.has(tag)) {
+              learned.add(tag);
+            }
           }
-          stocks = data;
-          break;
-        } catch (e: any) {
-          attempts.push(`${host}: ${e?.message || String(e)}`);
+        }
+        for (const tag of Array.from(learned)) {
+          const data = await fetchArray(`/tokens/v2/tag?query=${encodeURIComponent(tag)}`);
+          if (data && data.length > 0) { stocks = data; tagUsed = tag; break; }
+        }
+        // 3) Last resort: use the search results themselves (partial catalog)
+        if (!stocks && probe && probe.length > 0) {
+          stocks = probe;
+          tagUsed = "search:xstock (partial — tag endpoint unavailable)";
         }
       }
 
@@ -2164,6 +2203,8 @@ export async function registerRoutes(
         console.error("[API] Asset discovery failed:", attempts.join(" | "));
         return res.status(502).json({ error: `Jupiter token API failed — ${attempts.join(" | ")}` });
       }
+      if (tagUsed && !tagUsed.startsWith("search:")) cachedStocksTag = tagUsed;
+      console.log(`[API] Asset discovery using tag "${tagUsed}": ${stocks.length} tokens`);
 
       const registry = await storage.getAssetRegistry();
       const registryMints = new Set(registry.map(a => a.solanaMint));
@@ -2200,6 +2241,7 @@ export async function registerRoutes(
       res.json({
         totalOnJupiter: stocks.length,
         inRegistry: registry.length,
+        tagUsed,
         missing,
         unknownInRegistry,
       });
