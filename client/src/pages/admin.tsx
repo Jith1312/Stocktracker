@@ -525,7 +525,9 @@ export default function Admin() {
           )}
           {discoverQuery.isError && (
             <CardContent className="pt-0">
-              <p className="text-sm text-bear">Scan failed — check that the server can reach api.jup.ag and try again.</p>
+              <p className="text-sm text-bear break-all" data-testid="text-discover-error">
+                Scan failed: {(discoverQuery.error as Error)?.message || "unknown error"}
+              </p>
             </CardContent>
           )}
         </Card>
